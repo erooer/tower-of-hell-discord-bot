@@ -28,6 +28,7 @@ describe("ModerationService", () => {
   let repository: ModerationRepository;
   let listing: Listing;
   let send: ReturnType<typeof vi.fn>;
+  let dmSend: ReturnType<typeof vi.fn>;
   let edit: ReturnType<typeof vi.fn>;
   let fetchMessage: ReturnType<typeof vi.fn>;
   let client: Client;
@@ -51,7 +52,11 @@ describe("ModerationService", () => {
       id: JSON.stringify(payload).includes("Urgent Report") ? "urgent-message" : "staff-message"
     }));
     const channel = { isTextBased: () => true, isDMBased: () => false, send, messages: { fetch: fetchMessage } };
-    client = { channels: { fetch: vi.fn(async () => channel) } } as unknown as Client;
+    dmSend = vi.fn(async () => undefined);
+    client = {
+      channels: { fetch: vi.fn(async () => channel) },
+      users: { send: dmSend }
+    } as unknown as Client;
     moderationEnd = vi.fn(async () => listing);
     refreshLiveAnnouncement = vi.fn(async () => undefined);
     const liveServers = { moderationEnd, refreshLiveAnnouncement } as unknown as LiveServerService;
@@ -191,6 +196,9 @@ describe("ModerationService", () => {
     });
     expect((await service.blacklistReporter(listing.id, "reporter-1", authorized)).ok).toBe(true);
     expect(repository.isReporterBlacklisted("reporter-1")).toBe(true);
+    expect(dmSend).toHaveBeenCalledWith("reporter-1", expect.objectContaining({
+      content: expect.stringContaining(`Reason: Blacklisted from session ${listing.id}`)
+    }));
     expect((await service.blacklistReporter(listing.id, "reporter-1", authorized)).message).toBe("That reporter is already blacklisted.");
   });
 
@@ -210,6 +218,9 @@ describe("ModerationService", () => {
     expect((await service.resolve(listing.id, "strike", authorized)).ok).toBe(true);
     expect(repository.reporterHistory("reporter-1")).toEqual({ total: 1, valid: 1, rejected: 0 });
     expect(repository.getHostStrikeCount("host")).toBe(1);
+    expect(dmSend).toHaveBeenCalledWith("host", expect.objectContaining({
+      content: expect.stringContaining("Current host strikes: 1 / 3")
+    }));
     expect(moderationEnd).toHaveBeenCalledOnce();
     const resolvedPanels = edit.mock.calls.map((call) => JSON.stringify(call[0]));
     expect(resolvedPanels.some((payload) => payload.includes("Reported Session") && payload.includes('"disabled":true'))).toBe(true);

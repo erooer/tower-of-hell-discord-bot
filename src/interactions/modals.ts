@@ -10,6 +10,8 @@ import { REPORT_REASONS } from "../moderation/model.js";
 
 export const PRIVATE_SERVER_URL_INPUT_ID = "private-server-url";
 export const PRIVATE_SERVER_URL_LABEL = "Roblox Private Server Link";
+export const HOST_MESSAGE_INPUT_ID = "host-message";
+export const HOST_MESSAGE_LABEL = "Message from host (optional)";
 export const REPORT_REASON_INPUT_ID = "report-reason";
 export const REPORT_DETAILS_INPUT_ID = "report-details";
 
@@ -18,7 +20,7 @@ export const REPORT_DETAILS_INPUT_ID = "report-details";
  * Current Discord modal payloads require text inputs to be contained by a label
  * component with visible label text.
  */
-export function createPrivateServerUrlModal(customId: string, title: string): ModalBuilder {
+export function createPrivateServerUrlModal(customId: string, title: string, includeHostMessage = false): ModalBuilder {
   const input = new TextInputBuilder()
     .setCustomId(PRIVATE_SERVER_URL_INPUT_ID)
     .setStyle(TextInputStyle.Short)
@@ -30,10 +32,21 @@ export function createPrivateServerUrlModal(customId: string, title: string): Mo
     .setLabel(PRIVATE_SERVER_URL_LABEL)
     .setTextInputComponent(input);
 
-  return new ModalBuilder()
+  const modal = new ModalBuilder()
     .setCustomId(customId)
     .setTitle(title)
     .addLabelComponents(field);
+  if (includeHostMessage) {
+    modal.addLabelComponents(new LabelBuilder()
+      .setLabel(HOST_MESSAGE_LABEL)
+      .setTextInputComponent(new TextInputBuilder()
+        .setCustomId(HOST_MESSAGE_INPUT_ID)
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder("Add a short note for people joining")
+        .setRequired(false)
+        .setMaxLength(500)));
+  }
+  return modal;
 }
 
 export function createLiveServerReportModal(sessionId: string): ModalBuilder {

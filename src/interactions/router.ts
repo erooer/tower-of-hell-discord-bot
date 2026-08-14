@@ -13,14 +13,15 @@ import { normalizePrivateServerUrl } from "../live-servers/url.js";
 import {
   createLiveServerReportModal,
   createPrivateServerUrlModal,
+  HOST_MESSAGE_INPUT_ID,
   PRIVATE_SERVER_URL_INPUT_ID,
   REPORT_DETAILS_INPUT_ID,
   REPORT_REASON_INPUT_ID
 } from "./modals.js";
 import type { ModerationService } from "../moderation/service.js";
 import type { StaffActor } from "../moderation/model.js";
-import { hostGrindSelector, HOST_GRIND_SELECT_ID } from "./host-grind.js";
-import { isServerType, SERVER_TYPE_PRESENTATION } from "../live-servers/model.js";
+import { hostGrindSelector, hostSourceSelector, HOST_GRIND_SELECT_ID, HOST_SOURCE_PREFIX } from "./host-grind.js";
+import { isHostSource, isServerType, SERVER_TYPE_PRESENTATION } from "../live-servers/model.js";
 
 
 export function registerInteractionRouter(
@@ -45,6 +46,9 @@ export function registerInteractionRouter(
       }
       else if (interaction.isStringSelectMenu() && interaction.customId === HOST_GRIND_SELECT_ID) {
         await handleHostGrindSelect(interaction, service, config);
+      }
+      else if (interaction.isButton() && interaction.customId.startsWith(`${HOST_SOURCE_PREFIX}:`)) {
+        await handleHostSourceButton(interaction, service, config);
       }
       else if (interaction.isButton() && interaction.customId.startsWith("lsv1:")) await handleButton(interaction, service, moderation);
       else if (interaction.isModalSubmit() && interaction.customId.startsWith("lsv1:")) await handleModal(interaction, service, moderation, config);
@@ -231,9 +235,34 @@ async function handleHostGrindSelect(
     await interaction.reply({ content: eligibility.message, flags: MessageFlags.Ephemeral });
     return;
   }
+  await interaction.update(hostSourceSelector(type));
+}
+
+async function handleHostSourceButton(
+  interaction: ButtonInteraction,
+  service: LiveServerService,
+  config: Config
+): Promise<void> {
+  const [, prefix, source, type] = interaction.customId.split(":");
+  if (prefix !== "source" || !source || !type || !isHostSource(source) || !isServerType(type)) return;
+  if (interaction.channelId !== config.commandsChannelId || interaction.guildId !== config.guildId) {
+    await interaction.reply({ content: `This action only works in <#${config.commandsChannelId}>.`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const eligibility = service.checkCreationEligibility(
+    interaction.guildId,
+    interaction.user.id,
+    type,
+    memberHasRole(interaction, config.moderatorRoleId)
+  );
+  if (!eligibility.ok) {
+    await interaction.reply({ content: eligibility.message, flags: MessageFlags.Ephemeral });
+    return;
+  }
   await interaction.showModal(createPrivateServerUrlModal(
-    `lsv1:create:${type}`,
-    SERVER_TYPE_PRESENTATION[type].modalTitle
+    `lsv1:create:${type}:${source}`,
+    SERVER_TYPE_PRESENTATION[type].modalTitle,
+    true
   ));
 }
 
@@ -285,7 +314,7 @@ async function handleModal(
   moderation: ModerationService,
   config: Config
 ): Promise<void> {
-  const [, action, value] = interaction.customId.split(":");
+  const [, action, value, sourceValue] = interaction.customId.split(":");
   if (!action || !value) return;
   if (interaction.channelId !== config.commandsChannelId || interaction.guildId !== config.guildId) {
     await interaction.reply({ content: `This action only works in <#${config.commandsChannelId}>.`, flags: MessageFlags.Ephemeral });
@@ -301,7 +330,12 @@ async function handleModal(
   }
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   if (action === "create" && isServerType(value)) {
-    const result = await service.create(interaction.guildId, interaction.user.id, value, url);
+    if (!sourceValue || !isHostSource(sourceValue)) {
+      await interaction.editReply("That hosting selection is invalid. Please run /hostgrind again.");
+      return;
+    }
+    const hostMessage = interaction.fields.getTextInputValue(HOST_MESSAGE_INPUT_ID);
+    const result = await service.create(interaction.guildId, interaction.user.id, value, url, sourceValue, hostMessage);
     await interaction.editReply(result.message ?? "Done.");
     return;
   }

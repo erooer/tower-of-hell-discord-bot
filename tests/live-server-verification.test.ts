@@ -113,7 +113,19 @@ describe("LiveServerService verification boundary", () => {
     expect(controlSend).toHaveBeenCalledOnce();
   });
 
-  it("starts a cross-type cooldown only after successful publication and permits hosting at three hours", async () => {
+  it("rejects an oversized host message before verification or publication", async () => {
+    const verifier = acceptingVerifier();
+    const client = { channels: { fetch: vi.fn() } } as unknown as Client;
+    const service = new LiveServerService(client, repository, config, () => 1_800_000_000_000, verifier);
+    await expect(service.create("guild", "owner", "event", newUrl, "other", "x".repeat(501))).resolves.toEqual({
+      ok: false, message: "Message from host must be 500 characters or fewer."
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(client.channels.fetch).not.toHaveBeenCalled();
+    expect(repository.listActive()).toEqual([]);
+  });
+
+  it("starts a cross-type cooldown only after successful publication and permits hosting at two hours", async () => {
     let currentTime = 1_800_000_000_000;
     const verifier: PrivateServerVerifier = {
       verify: vi.fn(async (url: string) => ({
@@ -141,7 +153,7 @@ describe("LiveServerService verification boundary", () => {
     currentTime += 60 * 60 * 1_000;
     await expect(service.create("guild", "owner", "xp", newUrl)).resolves.toEqual({
       ok: false,
-      message: "You can host another server <t:1800010800:R>."
+      message: "You can host another server <t:1800007200:R>."
     });
     expect(verifier.verify).toHaveBeenCalledTimes(1);
 
@@ -193,7 +205,7 @@ describe("LiveServerService verification boundary", () => {
     roles.add("administrator-role");
     await expect(service.create("guild", "moderator", "xp", newUrl)).resolves.toEqual({
       ok: false,
-      message: "You can host another server <t:1800010800:R>."
+      message: "You can host another server <t:1800007200:R>."
     });
     expect(verifier.verify).toHaveBeenCalledOnce();
   });
@@ -354,6 +366,42 @@ describe("LiveServerService verification boundary", () => {
     expect(JSON.stringify(recoveredPayload)).toContain('"label":"Join Server"');
     expect(JSON.stringify(recoveredPayload)).toContain('"style":5');
     expect(JSON.stringify(recoveredPayload)).toContain(oldUrl);
+  });
+
+  it.each(["carmine", "xp", "event"] as const)("keeps an Other %s creator as controller and restores its message", async (type) => {
+    let currentTime = 1_800_000_000_000;
+    const send = vi.fn(async (_payload: unknown) => ({ id: `message-${send.mock.calls.length}` }));
+    const edit = vi.fn(async (_payload: unknown) => undefined);
+    const channel = {
+      isTextBased: () => true, isDMBased: () => false, send,
+      messages: { fetch: vi.fn(async () => ({ edit, delete: vi.fn(async () => undefined) })) }
+    };
+    const client = {
+      channels: { fetch: vi.fn(async () => channel) },
+      guilds: { fetch: vi.fn(async () => ({ members: { fetch: vi.fn(async () => ({
+        roles: { cache: { has: () => false } }
+      })) } })) }
+    } as unknown as Client;
+    const service = new LiveServerService(client, repository, config, () => currentTime, acceptingVerifier());
+    const created = await service.create("guild", `controller-${type}`, type, oldUrl, "other", "Realm clearing");
+    if (!created.ok) throw new Error(created.message);
+    expect(created.listing).toMatchObject({
+      ownerId: `controller-${type}`, hostSource: "other", hostMessage: "Realm clearing"
+    });
+    const publicJson = JSON.stringify(send.mock.calls[0]?.[0]);
+    expect(publicJson).toContain('"name":"Host","value":"Other"');
+    expect(publicJson).toContain('"name":"Message from host","value":"Realm clearing"');
+    expect(publicJson).not.toContain(`\"value\":\"<@controller-${type}>\"`);
+
+    expect((await service.changeUrl(created.listing.id, `controller-${type}`, newUrl)).ok).toBe(true);
+    currentTime = created.listing.expiresAt - 30 * 60_000;
+    expect((await service.extend(created.listing.id, `controller-${type}`)).ok).toBe(true);
+    await service.reconcileActive();
+    expect(edit.mock.calls.some(([payload]) => {
+      const json = JSON.stringify(payload);
+      return json.includes('"value":"Other"') && json.includes("Realm clearing") && json.includes(newUrl);
+    })).toBe(true);
+    expect((await service.end(created.listing.id, `controller-${type}`)).ok).toBe(true);
   });
 
   it("runs Event through creation, link change, extension, reconciliation, host/mod ending, and expiration", async () => {

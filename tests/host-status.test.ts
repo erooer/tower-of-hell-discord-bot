@@ -31,6 +31,7 @@ const actor: StaffActor = {
 
 function moderatorClient(hasRole = true): Client {
   return {
+    users: { send: vi.fn(async () => undefined) },
     guilds: {
       fetch: vi.fn(async () => ({
         members: { fetch: vi.fn(async () => ({ roles: { cache: { has: () => hasRole } } })) }
@@ -305,7 +306,7 @@ describe("host moderation status and reversals", () => {
 
     result = await service.updateHostStatus(targetId, "cooldown-add", "none", actor);
     expect(result.ok).toBe(true);
-    expect(cooldowns.get(targetId)?.nextEligibleAt).toBe(now + 3 * 60 * 60 * 1_000);
+    expect(cooldowns.get(targetId)?.nextEligibleAt).toBe(now + 2 * 60 * 60 * 1_000);
     expect(JSON.stringify(result.hostStatusPayload)).toContain("Clear Cooldown");
     result = await service.updateHostStatus(targetId, "cooldown-clear", String(now), actor);
     expect(result.ok).toBe(true);
@@ -339,6 +340,62 @@ describe("host moderation status and reversals", () => {
     expect(logJson).toContain(`\"name\":\"Target\",\"value\":\"<@${targetId}>\"`);
     expect(logJson).toContain('"name":"Developer ID","value":"`' + targetId + '`"');
     expect(logJson).toContain(`\"name\":\"Moderator\",\"value\":\"<@${moderatorId}>\"`);
+    expect(events.every((event) => event.dmDelivery === "Delivered")).toBe(true);
+    expect(logJson).toContain('"name":"Notification DM","value":"Delivered"');
+  });
+
+  it("attempts a DM for all eight positive and negative host-status changes", async () => {
+    const send = vi.fn(async (_userId: string, _payload: { content: string }) => undefined);
+    const events: any[] = [];
+    const client = moderatorClient() as any;
+    client.users.send = send;
+    const notified = new ModerationService(
+      client, listings, moderation,
+      { moderationEnd: vi.fn() } as unknown as LiveServerService,
+      config, () => now, cooldowns, { log: vi.fn(async (event) => { events.push(event); }) } as SessionLogger
+    );
+    expect((await notified.updateHostStatus(targetId, "strike-add", "0", actor)).ok).toBe(true);
+    const strikeId = moderation.getHostModerationStatus(targetId).latestActiveStrikeId!;
+    expect((await notified.updateHostStatus(targetId, "strike-remove", strikeId, actor)).ok).toBe(true);
+    expect((await notified.updateHostStatus(targetId, "host-blacklist", null, actor)).ok).toBe(true);
+    expect((await notified.updateHostStatus(targetId, "host-unblacklist", null, actor)).ok).toBe(true);
+    expect((await notified.updateHostStatus(targetId, "reporter-blacklist", null, actor)).ok).toBe(true);
+    expect((await notified.updateHostStatus(targetId, "reporter-unblacklist", null, actor)).ok).toBe(true);
+    expect((await notified.updateHostStatus(targetId, "cooldown-add", "none", actor)).ok).toBe(true);
+    expect((await notified.updateHostStatus(targetId, "cooldown-clear", String(now), actor)).ok).toBe(true);
+
+    expect(send).toHaveBeenCalledTimes(8);
+    const contents = send.mock.calls.map((call) => (call[1] as { content: string }).content);
+    expect(contents).toEqual(expect.arrayContaining([
+      expect.stringContaining("Current host strikes: 1 / 3"),
+      expect.stringContaining("Current host strikes: 0 / 3"),
+      "You have been host blacklisted.",
+      "Your host blacklist has been removed.",
+      "You have been reporter blacklisted.",
+      "Your reporter blacklist has been removed.",
+      "A hosting cooldown has been applied to your account.",
+      "Your hosting cooldown has been cleared."
+    ]));
+    expect(events).toHaveLength(8);
+    expect(events.every((event) => event.dmDelivery === "Delivered")).toBe(true);
+  });
+
+  it("keeps a moderation change when its DM fails and logs the failed delivery", async () => {
+    const client = moderatorClient() as any;
+    client.users.send = vi.fn(async () => { throw new Error("closed DMs"); });
+    const events: any[] = [];
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const notified = new ModerationService(
+      client, listings, moderation,
+      { moderationEnd: vi.fn() } as unknown as LiveServerService,
+      config, () => now, cooldowns, { log: vi.fn(async (event) => { events.push(event); }) } as SessionLogger
+    );
+    const result = await notified.updateHostStatus(targetId, "host-blacklist", null, actor);
+    expect(result.ok).toBe(true);
+    expect(moderation.isHostBlacklisted(targetId)).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({ dmDelivery: "Failed", targetUserId: targetId }));
+    expect(error).toHaveBeenCalledWith("Moderation notification DM delivery failed", expect.objectContaining({ targetUserId: targetId }));
+    error.mockRestore();
   });
 });
 

@@ -73,10 +73,11 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 
 - A listing starts with an exact two-hour lifetime.
 - Every submitted URL is verified as Tower of Hell Place ID `1962086868` before any database record, live message, or role ping is created. Modern Roblox share links are resolved through a five-redirect, Roblox-host-only chain with an eight-second timeout. Verification failures fail closed.
-- Owners can extend by exactly one hour only in the final ten minutes. The hour is added to the stored expiration, never to the click time. A transaction plus per-listing lock prevents double-click stacking.
+- Owners can extend by exactly one hour only in the final 30 minutes. The hour is added to the stored expiration, never to the click time. A transaction plus per-listing lock prevents double-click stacking.
+- After choosing Carmine, XP, or Event, the creator chooses **Self Hosted** or **Other** before entering the link. Self Hosted displays the creator; Other displays only `Other`, while the creator remains the internal controller. An optional, 500-character host message can be included without enabling user or role pings. Both values persist through restart reconciliation.
 - The creator's Discord user ID is checked on every button and change-link modal submission. UI visibility is not trusted.
 - One active listing per owner per server type is enforced by both application logic and a partial unique database index.
-- A successful publication starts a persistent three-hour cooldown for that Discord user across both grind types. Members with the exact configured `MODERATOR_ROLE_ID` bypass only this cooldown; their successful listings still update cooldown history. Opening `/hostgrind`, selecting a type, failed publication, link changes, extensions, reports, and moderation do not move the cooldown.
+- A successful publication starts a persistent two-hour cooldown for that Discord user across all session types. Members with the exact configured `MODERATOR_ROLE_ID` bypass only this cooldown; their successful listings still update cooldown history. Opening `/hostgrind`, selecting a type, failed publication, link changes, extensions, reports, and moderation do not move the cooldown.
 - Public announcements use a direct **Join Server** link button. Change Link and restart reconciliation rebuild it from the listing's latest verified URL, so its destination stays current.
 - Changing a link edits the original live message without pinging again or changing expiration.
 - **End Session** remains available to the session host and can also be used by a member with the exact configured moderator role. Moderator membership is refetched from Discord before the override is accepted; Change Link and Extend remain host-only.
@@ -88,7 +89,7 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 - The first unique report creates one quiet persistent **Reported Session** panel in the staff channel. At seven reports, the same case gains one separate **Urgent Report** message and pings `MODERATOR_ROLE_ID` exactly once; later reports refresh both existing messages without another ping.
 - Staff cases show aggregated reason totals. Staff can inspect each reporter's reason, details, and history; blacklist troll reporters; ignore reports; or strike/remove the server. Ignored reports become rejected history; struck reports become valid history.
 - One struck session can create only one host strike. At three active strikes, the host is persistently blocked from creating new listings.
-- `/hoststatus user_id:<developer ID>` lets exact-role moderators inspect and manage strikes, both blacklist types, report history, and hosting cooldowns without requiring the target to remain in the guild. Its persistent ephemeral panel supports bounded strike changes, blacklist toggles, and the normal three-hour cooldown; every successful change is audited, logged privately, and restart-safe.
+- `/hoststatus user_id:<developer ID>` lets exact-role moderators inspect and manage strikes, both blacklist types, report history, and hosting cooldowns without requiring the target to remain in the guild. Its persistent ephemeral panel supports bounded strike changes, blacklist toggles, and the normal two-hour cooldown; every successful change is audited, logged privately, and restart-safe. The bot also attempts a private notification for each successful status change; delivery failure is logged and never rolls back moderation.
 - Successful creation, extension, link change, host/moderator ending, natural expiration, manual public-message deletion, Strike / Remove, Reports Ignored, and strike-threshold host blacklisting write compact embeds only to `SESSION_LOGS_CHANNEL_ID`. End logs distinguish the original host, actual ending actor, and reason. Log failures never roll back the underlying action, and reconciliation does not fabricate event logs.
 - Reports, outcomes, cases, blacklists, and strike history share the SQLite database and are reconciled without duplicate case messages after restart.
 
@@ -107,15 +108,15 @@ The unit tests cover URL safety, duplicate constraints, exact extension arithmet
 
 Use a test server or temporary roles/channels before production.
 
-1. **Carmine:** Run `/hostgrind` in `#server-bot-cmds`, choose Carmine Hunting, submit a valid Roblox private-server URL, and verify one Carmine role ping, the minimal live embed, a two-hour relative expiration, and a control panel.
-2. **XP:** Repeat with `/hostgrind` and choose XP Grinding; verify the XP role and wording. Confirm the three-hour per-user cooldown applies across all session types.
+1. **Carmine:** Run `/hostgrind` in `#server-bot-cmds`, choose Carmine Hunting, choose Self Hosted or Other, submit a valid Roblox private-server URL and optional message, and verify one Carmine role ping, the selected host display, the minimal live embed, a two-hour relative expiration, and a control panel.
+2. **XP:** Repeat with `/hostgrind` and choose XP Grinding; verify the XP role and wording. Confirm the two-hour per-user cooldown applies across all session types.
 3. **Event:** Choose Event, submit a verified Tower of Hell private-server URL, and verify only the Event role is pinged. Confirm the Event title/description, Join Server button, controls, logging, expiration, and restart reconciliation use the same listing lifecycle.
 3. **Channel restriction:** Try `/hostgrind` in another channel; verify an ephemeral rejection and no listing.
 4. **Invalid/wrong-game URL:** Submit a non-Roblox, HTTP, Roblox URL without a private-server code, or a valid private-server URL for another Place ID; verify private rejection and no listing or role ping. Test both direct game URLs and modern `/share` links.
 5. **Duplicate:** Run the same command again while its listing is active; verify no second live message or ping.
 6. **Change link:** Press **Change Link**, submit another valid URL, and verify the existing live message changes while its message ID and expiration stay the same and no role is repinged.
 7. **Ownership:** As a different user, trigger a copied button custom ID or interact with the visible panel; verify the ephemeral ownership rejection and unchanged record.
-8. **Early extension:** Press **Extend +1h** with more than ten minutes remaining; verify rejection.
+8. **Early extension:** Press **Extend +1h** with more than 30 minutes remaining; verify rejection.
 9. **Eligible extension:** For a practical test, create a listing and adjust its `expires_at` in a disposable database to 5–30 minutes ahead. Press **Extend +1h** and verify exactly 3,600,000 ms is added to the old expiration, both messages update, and an immediate second click is rejected.
 10. **Manual end:** Press **End Session**; verify immediate deletion from `#live-servers`, disabled controls, ephemeral confirmation, and no extra live-channel message.
 11. **Automatic expiration:** In a disposable database, set an active record's `expires_at` to the near future. Verify the bot deletes the live message and disables controls after the configured poll interval without posting an expiration notice.

@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const HOST_COOLDOWN_MS = 3 * 60 * 60 * 1_000;
+export const HOST_COOLDOWN_MS = 2 * 60 * 60 * 1_000;
 
 export type HostCooldown = {
   userId: string;

@@ -142,4 +142,31 @@ describe("ListingRepository", () => {
       repository = new ListingRepository(database);
     }
   });
+
+  it("persists Other hosting and the optional host message across reloads", () => {
+    database.close();
+    const directory = mkdtempSync(join(tmpdir(), "listing-presentation-"));
+    const path = join(directory, "listings.sqlite");
+    try {
+      database = openDatabase(path);
+      repository = new ListingRepository(database);
+      const listing = repository.create({
+        guildId: "guild", ownerId: "controller", type: "event", hostSource: "other",
+        hostMessage: "Realm clearing after this round", url: "https://www.roblox.com/share?code=Event&type=Server",
+        liveChannelId: "live", liveMessageId: "message", controlChannelId: "controls", controlMessageId: "panel",
+        createdAt: base, expiresAt: base + 7_200_000
+      });
+      database.close();
+      database = openDatabase(path);
+      repository = new ListingRepository(database);
+      expect(repository.get(listing.id)).toMatchObject({
+        ownerId: "controller", hostSource: "other", hostMessage: "Realm clearing after this round"
+      });
+    } finally {
+      if (database.open) database.close();
+      rmSync(directory, { recursive: true, force: true });
+      database = openDatabase(":memory:");
+      repository = new ListingRepository(database);
+    }
+  });
 });

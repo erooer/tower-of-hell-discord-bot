@@ -53,6 +53,7 @@ describe("session action logging", () => {
     }));
     client = {
       channels: { fetch: vi.fn(async () => channel) },
+      users: { send: vi.fn(async () => undefined) },
       guilds: { fetch: vi.fn(async () => ({ members: { fetch: fetchMember } })) }
     } as unknown as Client;
     verifier = {
@@ -76,7 +77,7 @@ describe("session action logging", () => {
 
   it("logs successful creation, link change, extension, and manual ending once each", async () => {
     const listing = await create();
-    expect(logger.log).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(logger.log).toHaveBeenCalledWith(expect.objectContaining({
       title: "Session Created", listing: expect.objectContaining({ id: listing.id, ownerId: "host" }),
       actor: { kind: "host", userId: "host" }
     }));
@@ -197,7 +198,7 @@ describe("session action logging", () => {
 
     const struck = await reportedListing("strike-guild", "struck-host");
     expect((await moderationService.resolve(struck.id, "strike", actor)).ok).toBe(true);
-    expect(logger.log).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(logger.log).toHaveBeenCalledWith(expect.objectContaining({
       title: "Session Removed", listing: expect.objectContaining({ id: struck.id }),
       action: "Removed through moderation action (Strike / Remove)",
       actor: { kind: "moderator", userId: "moderator" }
@@ -218,6 +219,7 @@ describe("session log payload", () => {
   it("contains the host, actor, action, type, time, and listing without exposing the Roblox URL", () => {
     const listing = {
       id: "listing-id", guildId: "guild", ownerId: "host", type: "carmine" as const, url: oldUrl,
+      hostSource: "self" as const, hostMessage: null,
       liveChannelId: "live", liveMessageId: "message", controlChannelId: "commands", controlMessageId: "control",
       createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: false, cleanupPending: false,
       endedAt: 1_800_000_100_000, endedReason: "owner_ended", updatedAt: 1_800_000_100_000
@@ -241,6 +243,7 @@ describe("session log payload", () => {
   it("identifies Event sessions as Event in session logs", () => {
     const eventListing: Listing = {
       id: "event-listing", guildId: "guild", ownerId: "event-host", type: "event", url: oldUrl,
+      hostSource: "self", hostMessage: null,
       liveChannelId: "live", liveMessageId: "live", controlChannelId: "controls", controlMessageId: "control",
       createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
       endedAt: null, endedReason: null, updatedAt: 1_800_000_000_000

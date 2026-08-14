@@ -5,6 +5,7 @@ import type { CaseSnapshot, ModerationCase } from "../src/moderation/model.js";
 
 const listing: Listing = {
   id: "session-id", guildId: "guild", ownerId: "host-id", type: "carmine",
+  hostSource: "self", hostMessage: null,
   url: "https://www.roblox.com/share?code=ValidCode123&type=Server",
   liveChannelId: "live", liveMessageId: "live-message", controlChannelId: "commands",
   controlMessageId: "control-message", createdAt: 1_800_000_000_000,

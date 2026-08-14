@@ -15,6 +15,8 @@ export function openDatabase(path: string): Database.Database {
       guild_id TEXT NOT NULL,
       owner_id TEXT NOT NULL,
       type TEXT NOT NULL CHECK(type IN ('carmine', 'xp', 'event')),
+      host_source TEXT NOT NULL DEFAULT 'self' CHECK(host_source IN ('self', 'other')),
+      host_message TEXT,
       url TEXT NOT NULL,
       live_channel_id TEXT NOT NULL,
       live_message_id TEXT,
@@ -128,6 +130,7 @@ export function openDatabase(path: string): Database.Database {
   `);
   migrateReportReasons(db);
   migrateListingTypes(db);
+  migrateListingPresentation(db);
   migrateModerationCasePanels(db);
   migrateModerationStatus(db);
   return db;
@@ -143,14 +146,21 @@ function migrateListingTypes(db: Database.Database): void {
     db.exec(`
       CREATE TABLE live_server_listings_event_migration (
         id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, owner_id TEXT NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('carmine', 'xp', 'event')), url TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('carmine', 'xp', 'event')),
+        host_source TEXT NOT NULL DEFAULT 'self' CHECK(host_source IN ('self', 'other')),
+        host_message TEXT, url TEXT NOT NULL,
         live_channel_id TEXT NOT NULL, live_message_id TEXT, control_channel_id TEXT NOT NULL,
         control_message_id TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
         active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
         cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_pending IN (0, 1)),
         ended_at INTEGER, ended_reason TEXT, updated_at INTEGER NOT NULL
       );
-      INSERT INTO live_server_listings_event_migration SELECT * FROM live_server_listings;
+      INSERT INTO live_server_listings_event_migration
+        (id,guild_id,owner_id,type,url,live_channel_id,live_message_id,control_channel_id,
+         control_message_id,created_at,expires_at,active,cleanup_pending,ended_at,ended_reason,updated_at)
+        SELECT id,guild_id,owner_id,type,url,live_channel_id,live_message_id,control_channel_id,
+         control_message_id,created_at,expires_at,active,cleanup_pending,ended_at,ended_reason,updated_at
+        FROM live_server_listings;
       DROP TABLE live_server_listings;
       ALTER TABLE live_server_listings_event_migration RENAME TO live_server_listings;
       CREATE UNIQUE INDEX one_active_listing_per_owner_type
@@ -161,6 +171,14 @@ function migrateListingTypes(db: Database.Database): void {
   } finally {
     db.pragma("foreign_keys = ON");
   }
+}
+
+function migrateListingPresentation(db: Database.Database): void {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(live_server_listings)").all() as Array<{ name: string }>).map((column) => column.name)
+  );
+  addColumnIfMissing(db, "live_server_listings", columns, "host_source", "TEXT NOT NULL DEFAULT 'self' CHECK(host_source IN ('self', 'other'))");
+  addColumnIfMissing(db, "live_server_listings", columns, "host_message", "TEXT");
 }
 
 function addColumnIfMissing(

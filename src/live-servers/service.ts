@@ -7,7 +7,14 @@ import {
 } from "discord.js";
 import type { Config } from "../config.js";
 import type { ListingRepository } from "../storage/listing-repository.js";
-import { LISTING_LIFETIME_MS, type Listing, type ServerType } from "./model.js";
+import {
+  HOST_MESSAGE_MAX_LENGTH,
+  isHostSource,
+  LISTING_LIFETIME_MS,
+  type HostSource,
+  type Listing,
+  type ServerType
+} from "./model.js";
 import { controlMessage, liveMessage } from "./messages.js";
 import { KeyedMutex } from "./keyed-mutex.js";
 import {
@@ -119,7 +126,19 @@ export class LiveServerService {
     }
   }
 
-  async create(guildId: string, ownerId: string, type: ServerType, url: string): Promise<ServiceResult> {
+  async create(
+    guildId: string,
+    ownerId: string,
+    type: ServerType,
+    url: string,
+    hostSource: HostSource = "self",
+    hostMessageValue = ""
+  ): Promise<ServiceResult> {
+    if (!isHostSource(hostSource)) return { ok: false, message: "Choose Self Hosted or Other." };
+    const hostMessage = hostMessageValue.trim() || null;
+    if (hostMessage && hostMessage.length > HOST_MESSAGE_MAX_LENGTH) {
+      return { ok: false, message: `Message from host must be ${HOST_MESSAGE_MAX_LENGTH} characters or fewer.` };
+    }
     return this.mutex.run(`owner:${guildId}:${ownerId}`, async () => {
       const isModerator = await this.hasModeratorRole(guildId, ownerId);
       const eligibility = this.checkCreationEligibility(guildId, ownerId, type, isModerator);
@@ -132,7 +151,7 @@ export class LiveServerService {
       let listing: Listing;
       try {
         listing = this.repository.create({
-          guildId, ownerId, type, url: verification.originalUrl,
+          guildId, ownerId, type, hostSource, hostMessage, url: verification.originalUrl,
           liveChannelId: this.config.liveChannelId,
           liveMessageId: null,
           controlChannelId: this.config.commandsChannelId,

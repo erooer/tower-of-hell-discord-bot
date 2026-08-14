@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   createLiveServerReportModal,
   createPrivateServerUrlModal,
+  HOST_MESSAGE_INPUT_ID,
+  HOST_MESSAGE_LABEL,
   PRIVATE_SERVER_URL_INPUT_ID,
   PRIVATE_SERVER_URL_LABEL,
   REPORT_DETAILS_INPUT_ID,
@@ -38,6 +40,22 @@ describe("Live Server URL modals", () => {
       required: true,
       max_length: 500
     });
+  });
+
+  it("adds a labeled optional bounded host message to creation modals only", () => {
+    const payload = createPrivateServerUrlModal("lsv1:create:event:other", "Start an Event", true).toJSON();
+    expect(payload.components).toHaveLength(2);
+    const messageLabel = payload.components[1];
+    if (!messageLabel || messageLabel.type !== ComponentType.Label) throw new Error("Expected a message label.");
+    expect(messageLabel.label).toBe(HOST_MESSAGE_LABEL);
+    expect(messageLabel.component).toMatchObject({
+      type: ComponentType.TextInput,
+      custom_id: HOST_MESSAGE_INPUT_ID,
+      style: TextInputStyle.Paragraph,
+      required: false,
+      max_length: 500
+    });
+    expect(createPrivateServerUrlModal("lsv1:change:id", "Change private-server link").toJSON().components).toHaveLength(1);
   });
 });
 

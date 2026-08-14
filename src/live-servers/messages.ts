@@ -16,6 +16,7 @@ function discordTimestamp(ms: number, style: "t" | "R"): string {
 
 export function liveMessage(listing: Listing, roleId: string, reportCount = 0): MessageCreateOptions & MessageEditOptions {
   const presentation = SERVER_TYPE_PRESENTATION[listing.type];
+  const hostValue = listing.hostSource === "other" ? "Other" : `<@${listing.ownerId}>`;
   const joinRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setLabel("Join Server")
@@ -35,11 +36,12 @@ export function liveMessage(listing: Listing, roleId: string, reportCount = 0): 
         .setTitle(presentation.announcementTitle)
         .setDescription(presentation.announcementDescription ?? null)
         .addFields(
-          { name: "Host", value: `<@${listing.ownerId}>`, inline: true },
+          { name: "Host", value: hostValue, inline: true },
           ...(listing.type === "event" ? [{ name: "Activity", value: "Event", inline: true }] : []),
           { name: "Started", value: discordTimestamp(listing.createdAt, "t"), inline: true },
           { name: "Expires", value: discordTimestamp(listing.expiresAt, "R"), inline: true },
-          { name: "Reports", value: `⚠️ ${reportCount}/${REPORT_THRESHOLD}`, inline: true }
+          { name: "Reports", value: `⚠️ ${reportCount}/${REPORT_THRESHOLD}`, inline: true },
+          ...(listing.hostMessage ? [{ name: "Message from host", value: listing.hostMessage }] : [])
         )
     ],
     components: [joinRow]
@@ -56,7 +58,7 @@ export function controlMessage(listing: Listing, disabled = !listing.active): Me
     new ButtonBuilder()
       .setCustomId(`lsv1:extend:${listing.id}`)
       .setLabel("Extend +1h")
-      .setStyle(ButtonStyle.Secondary)
+      .setStyle(ButtonStyle.Success)
       .setDisabled(disabled),
     new ButtonBuilder()
       .setCustomId(`lsv1:end:${listing.id}`)

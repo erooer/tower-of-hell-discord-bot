@@ -5,6 +5,7 @@ import type { Listing } from "../src/live-servers/model.js";
 
 const listing: Listing = {
   id: "listing-id", guildId: "guild", ownerId: "12345678901234567", type: "carmine",
+  hostSource: "self", hostMessage: null,
   url: "https://www.roblox.com/share?code=AbCdEfGh1234&type=Server",
   liveChannelId: "live", liveMessageId: "message", controlChannelId: "commands", controlMessageId: "panel",
   createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
@@ -73,6 +74,28 @@ describe("Discord message builders", () => {
     expect(json).not.toContain("xp-role");
   });
 
+  it.each(["carmine", "xp", "event"] as const)("renders Other and an optional safe host message for %s", (type) => {
+    const message = liveMessage({
+      ...listing,
+      type,
+      hostSource: "other",
+      hostMessage: "Join for glands <@12345678901234567> <@&99999999999999999>"
+    }, `${type}-role`);
+    const payload = JSON.parse(JSON.stringify(message));
+    expect(payload.embeds[0].fields).toContainEqual({ name: "Host", value: "Other", inline: true });
+    expect(payload.embeds[0].fields).toContainEqual({
+      name: "Message from host",
+      value: "Join for glands <@12345678901234567> <@&99999999999999999>"
+    });
+    expect(message.allowedMentions).toEqual({ roles: [`${type}-role`], users: [], repliedUser: false });
+    expect(JSON.stringify(payload.embeds[0].fields.find((field: any) => field.name === "Host"))).not.toContain(listing.ownerId);
+  });
+
+  it("omits the host message field when it is blank", () => {
+    const embed = firstEmbed(liveMessage({ ...listing, hostMessage: null }, "role"));
+    expect(embed.fields?.some((field) => field.name === "Message from host")).toBe(false);
+  });
+
   it("preserves Event presentation while changing its URL or expiration", () => {
     const eventListing = { ...listing, type: "event" as const };
     const changed = liveMessage({ ...eventListing, url: "https://www.roblox.com/share?code=EventNew&type=Server" }, "event-role");
@@ -127,6 +150,7 @@ describe("Discord message builders", () => {
     expect(activeJson).toContain("lsv1:extend:listing-id");
     expect(activeJson).toContain("lsv1:end:listing-id");
     expect(activeJson).toContain('"label":"End Session"');
+    expect(activeJson).toContain('"label":"Extend +1h","style":3');
     expect(activeJson).not.toContain('"label":"End Server"');
     expect(JSON.stringify(active.embeds)).toContain("Available during the final 30 minutes");
     expect(JSON.stringify(active.embeds)).not.toContain("final 10 minutes");

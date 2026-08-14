@@ -6,6 +6,7 @@ import { reportersReply, staffCaseMessage, urgentCaseMessage } from "./messages.
 import type { CaseSnapshot, ReporterSummary, StaffActor } from "./model.js";
 import type { ListingRepository } from "../storage/listing-repository.js";
 import type { ModerationRepository } from "../storage/moderation-repository.js";
+import type { HostModerationStatus } from "../storage/moderation-repository.js";
 import { isReportReason } from "./model.js";
 import type { HostCooldownStore } from "../storage/host-cooldown-repository.js";
 import { hostStatusMessage, type HostStatusAction } from "./host-status.js";
@@ -62,6 +63,7 @@ export class ModerationService {
     if (unauthorized) return unauthorized;
     return this.mutex.run(`host-status:${userId}`, async () => {
       const occurredAt = this.now();
+      const beforeStatus = this.moderation.getHostModerationStatus(userId);
       let changed = false;
       let message: string;
       if (action === "strike-add") {
@@ -99,10 +101,15 @@ export class ModerationService {
         const status = this.moderation.getHostModerationStatus(userId);
         const cooldown = this.hostCooldowns.get(userId);
         const cooldownActive = Boolean(cooldown && cooldown.nextEligibleAt > occurredAt);
+        const dmDelivery = await this.sendModerationDm(
+          userId,
+          this.hostStatusDmMessages(action, beforeStatus, status)
+        );
         await this.safeLog({
           kind: "host-status", title: "Host Status Updated", action: message,
           targetUserId: userId, moderatorId: actor.userId,
           result: `${status.strikeCount} / 3 strikes | Host blacklist: ${status.hostBlacklisted ? "Yes" : "No"} | Reporter blacklist: ${status.reporterBlacklisted ? "Yes" : "No"} | Cooldown: ${cooldownActive ? "Active" : "Not active"}`,
+          dmDelivery,
           occurredAt
         });
       }
@@ -195,6 +202,17 @@ export class ModerationService {
       return { ok: false, message: "That user is not a reporter on this moderation case." };
     }
     const inserted = this.moderation.blacklistReporter(reporterId, actor.userId, `Blacklisted from session ${sessionId}`, this.now());
+    if (inserted) {
+      const occurredAt = this.now();
+      const dmDelivery = await this.sendModerationDm(reporterId, [
+        `You have been reporter blacklisted.\n\nReason: Blacklisted from session ${sessionId}`
+      ]);
+      await this.safeLog({
+        kind: "host-status", title: "Host Status Updated", action: "Added the reporter blacklist.",
+        targetUserId: reporterId, moderatorId: actor.userId,
+        result: "Reporter blacklist: Yes", dmDelivery, occurredAt
+      });
+    }
     return inserted
       ? { ok: true, message: `<@${reporterId}> has been blacklisted from future live-server reports.` }
       : { ok: false, message: "That reporter is already blacklisted." };
@@ -220,6 +238,17 @@ export class ModerationService {
         });
         return { ok: true, message: "Reports ignored and recorded as rejected." };
       }
+      const strikeDm = [
+        `A host strike has been added to your account.\n\nCurrent host strikes: ${result.strikeCount} / 3`
+      ];
+      if (result.hostBlacklistedNow) strikeDm.push("You have been host blacklisted.");
+      const dmDelivery = await this.sendModerationDm(listing!.ownerId, strikeDm);
+      await this.safeLog({
+        kind: "host-status", title: "Host Status Updated", action: "Added a host strike through Strike / Remove.",
+        targetUserId: listing!.ownerId, moderatorId: actor.userId,
+        result: `${result.strikeCount} / 3 strikes | Host blacklist: ${result.hostBlacklisted ? "Yes" : "No"}`,
+        dmDelivery, occurredAt: this.now()
+      });
       if (listing && result.hostBlacklistedNow) {
         await this.safeLog({
           title: "Host Blacklisted", action: "Host blacklist applied after reaching the strike threshold", listing,
@@ -281,6 +310,45 @@ export class ModerationService {
       cooldown: this.hostCooldowns.get(userId),
       now: this.now()
     }, notice);
+  }
+
+  private hostStatusDmMessages(
+    action: HostStatusAction,
+    before: HostModerationStatus,
+    after: HostModerationStatus
+  ): string[] {
+    const messages: string[] = [];
+    if (action === "strike-add") {
+      messages.push(`A host strike has been added to your account.\n\nCurrent host strikes: ${after.strikeCount} / 3`);
+    } else if (action === "strike-remove") {
+      messages.push(`A host strike has been removed from your account.\n\nCurrent host strikes: ${after.strikeCount} / 3`);
+    } else if (action === "host-blacklist") messages.push("You have been host blacklisted.");
+    else if (action === "host-unblacklist") messages.push("Your host blacklist has been removed.");
+    else if (action === "reporter-blacklist") messages.push("You have been reporter blacklisted.");
+    else if (action === "reporter-unblacklist") messages.push("Your reporter blacklist has been removed.");
+    else if (action === "cooldown-add") messages.push("A hosting cooldown has been applied to your account.");
+    else if (action === "cooldown-clear") messages.push("Your hosting cooldown has been cleared.");
+
+    if (action !== "host-blacklist" && !before.hostBlacklisted && after.hostBlacklisted) {
+      messages.push("You have been host blacklisted.");
+    }
+    if (action !== "host-unblacklist" && before.hostBlacklisted && !after.hostBlacklisted) {
+      messages.push("Your host blacklist has been removed.");
+    }
+    return messages;
+  }
+
+  private async sendModerationDm(
+    userId: string,
+    messages: readonly string[]
+  ): Promise<"Delivered" | "Failed"> {
+    try {
+      await this.client.users.send(userId, { content: messages.join("\n\n") });
+      return "Delivered";
+    } catch (error) {
+      console.error("Moderation notification DM delivery failed", { targetUserId: userId, error });
+      return "Failed";
+    }
   }
 
   private snapshot(sessionId: string): CaseSnapshot | null {

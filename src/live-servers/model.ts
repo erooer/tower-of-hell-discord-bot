@@ -1,5 +1,12 @@
 export const SERVER_TYPES = ["carmine", "xp", "event"] as const;
 export type ServerType = (typeof SERVER_TYPES)[number];
+export const HOST_SOURCES = ["self", "other"] as const;
+export type HostSource = (typeof HOST_SOURCES)[number];
+export const HOST_MESSAGE_MAX_LENGTH = 500;
+
+export function isHostSource(value: string): value is HostSource {
+  return HOST_SOURCES.includes(value as HostSource);
+}
 
 export function isServerType(value: string): value is ServerType {
   return SERVER_TYPES.includes(value as ServerType);
@@ -33,6 +40,8 @@ export type Listing = {
   guildId: string;
   ownerId: string;
   type: ServerType;
+  hostSource: HostSource;
+  hostMessage: string | null;
   url: string;
   liveChannelId: string;
   liveMessageId: string | null;

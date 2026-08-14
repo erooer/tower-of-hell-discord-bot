@@ -19,6 +19,7 @@ export type ModerationStatusLogEvent = {
   targetUserId: string;
   moderatorId: string;
   result: string;
+  dmDelivery?: "Delivered" | "Failed";
   occurredAt: number;
 };
 
@@ -43,6 +44,7 @@ export function sessionLogMessage(event: LogEvent): MessageCreateOptions {
           { name: "Moderator", value: `<@${event.moderatorId}>`, inline: true },
           { name: "Action", value: event.action },
           { name: "Result", value: event.result },
+          ...(event.dmDelivery ? [{ name: "Notification DM", value: event.dmDelivery, inline: true }] : []),
           { name: "Time", value: `<t:${Math.floor(event.occurredAt / 1_000)}:F>` }
         )]
     };

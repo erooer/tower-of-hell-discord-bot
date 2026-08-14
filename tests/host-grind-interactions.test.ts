@@ -21,12 +21,12 @@ function installRouter(service: Partial<LiveServerService>) {
   return handler;
 }
 
-function classifiers(kind: "command" | "select" | "button") {
+function classifiers(kind: "command" | "select" | "button" | "modal") {
   return {
     isChatInputCommand: () => kind === "command",
     isStringSelectMenu: () => kind === "select",
     isButton: () => kind === "button",
-    isModalSubmit: () => false,
+    isModalSubmit: () => kind === "modal",
     isRepliable: () => true
   };
 }
@@ -66,24 +66,61 @@ describe("/hostgrind interactions", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["carmine", "lsv1:create:carmine", "Start a Carmine Hunt"],
-    ["xp", "lsv1:create:xp", "Start XP Grinding"],
-    ["event", "lsv1:create:event", "Start an Event"]
-  ])("selecting %s opens its existing creation modal without creating yet", async (type, customId, title) => {
+  it.each(["carmine", "xp", "event"])("selecting %s asks who hosts before opening a modal", async (type) => {
     const checkCreationEligibility = vi.fn(() => ({ ok: true as const }));
     const create = vi.fn();
     const handler = installRouter({ checkCreationEligibility, create });
-    const showModal = vi.fn(async (_modal: unknown) => undefined);
+    const update = vi.fn(async (_payload: unknown) => undefined);
     await handler({
       ...classifiers("select"), customId: "lshost:type", values: [type], channelId: "commands", guildId: "guild",
-      user: { id: "host" }, showModal, reply: vi.fn(), followUp: vi.fn(), deferred: false, replied: false
+      user: { id: "host" }, update, reply: vi.fn(), followUp: vi.fn(), deferred: false, replied: false
     });
 
     expect(checkCreationEligibility).toHaveBeenCalledWith("guild", "host", type, false);
-    const modal = showModal.mock.calls[0]?.[0] as { toJSON(): unknown };
-    expect(modal.toJSON()).toMatchObject({ custom_id: customId, title });
+    expect(JSON.stringify(update.mock.calls[0]?.[0])).toContain(`lshost:source:self:${type}`);
+    expect(JSON.stringify(update.mock.calls[0]?.[0])).toContain(`lshost:source:other:${type}`);
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["carmine", "self", "Start a Carmine Hunt"],
+    ["xp", "other", "Start XP Grinding"],
+    ["event", "self", "Start an Event"]
+  ])("selecting %s / %s opens the link and optional-message modal", async (type, source, title) => {
+    const checkCreationEligibility = vi.fn(() => ({ ok: true as const }));
+    const handler = installRouter({ checkCreationEligibility });
+    const showModal = vi.fn(async (_modal: unknown) => undefined);
+    await handler({
+      ...classifiers("button"), customId: `lshost:source:${source}:${type}`,
+      channelId: "commands", guildId: "guild", user: { id: "host" },
+      showModal, reply: vi.fn(), followUp: vi.fn(), deferred: false, replied: false
+    });
+    const modal = showModal.mock.calls[0]?.[0] as { toJSON(): any };
+    const json = modal.toJSON();
+    expect(json).toMatchObject({ custom_id: `lsv1:create:${type}:${source}`, title });
+    expect(JSON.stringify(json)).toContain("Message from host (optional)");
+    expect(checkCreationEligibility).toHaveBeenCalledWith("guild", "host", type, false);
+  });
+
+  it("passes the selected host source and optional message through final modal submission", async () => {
+    const create = vi.fn(async () => ({ ok: true as const, listing: {} as any, message: "Created" }));
+    const handler = installRouter({ create });
+    const editReply = vi.fn(async (_payload: unknown) => undefined);
+    await handler({
+      ...classifiers("modal"), customId: "lsv1:create:event:other",
+      channelId: "commands", guildId: "guild", user: { id: "creator" },
+      fields: { getTextInputValue: vi.fn((id: string) => id === "private-server-url"
+        ? "https://www.roblox.com/share?code=ValidCode123&type=Server"
+        : "Realm clearing") },
+      deferReply: vi.fn(async () => undefined), editReply,
+      reply: vi.fn(), followUp: vi.fn(), deferred: false, replied: false
+    });
+    expect(create).toHaveBeenCalledWith(
+      "guild", "creator", "event",
+      "https://www.roblox.com/share?code=ValidCode123&type=Server",
+      "other", "Realm clearing"
+    );
+    expect(editReply).toHaveBeenCalledWith("Created");
   });
 
   it("returns the persisted cooldown timestamp before showing the selector", async () => {

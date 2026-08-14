@@ -20,7 +20,7 @@ describe("HostCooldownRepository", () => {
     for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
   });
 
-  it("persists a successful creation and its three-hour eligibility time across reloads", () => {
+  it("persists a successful creation and its two-hour eligibility time across reloads", () => {
     const directory = mkdtempSync(join(tmpdir(), "host-cooldown-"));
     directories.push(directory);
     const path = join(directory, "bot.sqlite");
