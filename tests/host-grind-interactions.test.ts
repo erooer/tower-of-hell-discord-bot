@@ -7,7 +7,7 @@ import type { Config } from "../src/config.js";
 import type { LiveServerService } from "../src/live-servers/service.js";
 import type { ModerationService } from "../src/moderation/service.js";
 
-const config = { guildId: "guild", commandsChannelId: "commands" } as Config;
+const config = { guildId: "guild", commandsChannelId: "commands", moderatorRoleId: "moderator-role" } as Config;
 
 function installRouter(service: Partial<LiveServerService>) {
   let handler!: (interaction: any) => Promise<void>;
@@ -59,7 +59,7 @@ describe("/hostgrind interactions", () => {
       user: { id: "host" }, reply, followUp: vi.fn(), deferred: false, replied: false
     });
 
-    expect(checkHostingEligibility).toHaveBeenCalledWith("host");
+    expect(checkHostingEligibility).toHaveBeenCalledWith("host", false);
     expect(reply).toHaveBeenCalledWith(expect.objectContaining({ flags: MessageFlags.Ephemeral }));
     expect(JSON.stringify(reply.mock.calls[0]?.[0])).toContain("lshost:type");
     expect(create).not.toHaveBeenCalled();
@@ -78,7 +78,7 @@ describe("/hostgrind interactions", () => {
       user: { id: "host" }, showModal, reply: vi.fn(), followUp: vi.fn(), deferred: false, replied: false
     });
 
-    expect(checkCreationEligibility).toHaveBeenCalledWith("guild", "host", type);
+    expect(checkCreationEligibility).toHaveBeenCalledWith("guild", "host", type, false);
     const modal = showModal.mock.calls[0]?.[0] as { toJSON(): unknown };
     expect(modal.toJSON()).toMatchObject({ custom_id: customId, title });
     expect(create).not.toHaveBeenCalled();
@@ -93,6 +93,17 @@ describe("/hostgrind interactions", () => {
       user: { id: "host" }, reply, followUp: vi.fn(), deferred: false, replied: false
     });
     expect(reply).toHaveBeenCalledWith({ content: message, flags: MessageFlags.Ephemeral });
+  });
+
+  it("passes exact moderator-role membership into the initial cooldown check", async () => {
+    const checkHostingEligibility = vi.fn(() => ({ ok: true as const }));
+    const handler = installRouter({ checkHostingEligibility });
+    await handler({
+      ...classifiers("command"), commandName: "hostgrind", channelId: "commands", guildId: "guild",
+      user: { id: "moderator" }, member: { roles: ["moderator-role"] },
+      reply: vi.fn(async (_payload: unknown) => undefined), followUp: vi.fn(), deferred: false, replied: false
+    });
+    expect(checkHostingEligibility).toHaveBeenCalledWith("moderator", true);
   });
 
   it("preserves the host blacklist check", async () => {

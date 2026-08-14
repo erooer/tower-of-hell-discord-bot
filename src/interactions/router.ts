@@ -135,7 +135,10 @@ async function handleCommand(interaction: ChatInputCommandInteraction, service: 
     await interaction.reply({ content: `This command only works in <#${config.commandsChannelId}>.`, flags: MessageFlags.Ephemeral });
     return;
   }
-  const eligibility = service.checkHostingEligibility(interaction.user.id);
+  const eligibility = service.checkHostingEligibility(
+    interaction.user.id,
+    memberHasRole(interaction, config.moderatorRoleId)
+  );
   if (!eligibility.ok) {
     await interaction.reply({ content: eligibility.message, flags: MessageFlags.Ephemeral });
     return;
@@ -157,7 +160,12 @@ async function handleHostGrindSelect(
     await interaction.reply({ content: "Choose a valid grind type.", flags: MessageFlags.Ephemeral });
     return;
   }
-  const eligibility = service.checkCreationEligibility(interaction.guildId, interaction.user.id, type);
+  const eligibility = service.checkCreationEligibility(
+    interaction.guildId,
+    interaction.user.id,
+    type,
+    memberHasRole(interaction, config.moderatorRoleId)
+  );
   if (!eligibility.ok) {
     await interaction.reply({ content: eligibility.message, flags: MessageFlags.Ephemeral });
     return;
@@ -166,6 +174,14 @@ async function handleHostGrindSelect(
     `lsv1:create:${type}`,
     type === "carmine" ? "Start a Carmine Hunt" : "Start XP Grinding"
   ));
+}
+
+function memberHasRole(
+  interaction: ChatInputCommandInteraction | StringSelectMenuInteraction,
+  roleId: string
+): boolean {
+  const roles = interaction.member?.roles;
+  return Array.isArray(roles) ? roles.includes(roleId) : roles?.cache.has(roleId) ?? false;
 }
 
 async function handleButton(

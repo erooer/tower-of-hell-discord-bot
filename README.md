@@ -74,7 +74,7 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 - Owners can extend by exactly one hour only in the final ten minutes. The hour is added to the stored expiration, never to the click time. A transaction plus per-listing lock prevents double-click stacking.
 - The creator's Discord user ID is checked on every button and change-link modal submission. UI visibility is not trusted.
 - One active listing per owner per server type is enforced by both application logic and a partial unique database index.
-- A successful publication starts a persistent three-hour cooldown for that Discord user across both grind types. Opening `/hostgrind`, selecting a type, failed publication, link changes, extensions, reports, and moderation do not move the cooldown.
+- A successful publication starts a persistent three-hour cooldown for that Discord user across both grind types. Members with the exact configured `MODERATOR_ROLE_ID` bypass only this cooldown; their successful listings still update cooldown history. Opening `/hostgrind`, selecting a type, failed publication, link changes, extensions, reports, and moderation do not move the cooldown.
 - Public announcements use a direct **Join Server** link button. Change Link and restart reconciliation rebuild it from the listing's latest verified URL, so its destination stays current.
 - Changing a link edits the original live message without pinging again or changing expiration.
 - Ending or expiration deletes the live message and disables the control panel. Nothing is posted to the live channel afterward.

@@ -29,6 +29,37 @@ describe("LiveServerService verification boundary", () => {
   });
   afterEach(() => database.close());
 
+  function publishingClient(roleIds: Set<string>): Client {
+    const message = { edit: vi.fn(async () => undefined), delete: vi.fn(async () => undefined) };
+    const channel = {
+      isTextBased: () => true,
+      isDMBased: () => false,
+      send: vi.fn(async () => ({ id: `message-${Math.random()}` })),
+      messages: { fetch: vi.fn(async () => message) }
+    };
+    return {
+      channels: { fetch: vi.fn(async () => channel) },
+      guilds: {
+        fetch: vi.fn(async () => ({
+          members: {
+            fetch: vi.fn(async () => ({ roles: { cache: { has: (roleId: string) => roleIds.has(roleId) } } }))
+          }
+        }))
+      }
+    } as unknown as Client;
+  }
+
+  function acceptingVerifier(): PrivateServerVerifier {
+    return {
+      verify: vi.fn(async (url: string) => ({
+        valid: true as const,
+        originalUrl: url,
+        resolvedUrl: "https://www.roblox.com/games/1962086868/Tower-of-Hell?privateServerLinkCode=Code",
+        placeId: "1962086868" as const
+      }))
+    };
+  }
+
   it("does not create a record, fetch a Discord channel, or ping before verification succeeds", async () => {
     let finishVerification!: (result: RobloxVerificationResult) => void;
     const verifier: PrivateServerVerifier = {
@@ -117,6 +148,93 @@ describe("LiveServerService verification boundary", () => {
     const second = await service.create("guild", "owner", "xp", newUrl);
     expect(second.ok).toBe(true);
     expect(verifier.verify).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["carmine" as const, "xp" as const],
+    ["xp" as const, "carmine" as const]
+  ])("lets an exact-role moderator create %s during a cooldown started by %s", async (targetType, previousType) => {
+    let currentTime = 1_800_000_000_000;
+    const roles = new Set([config.moderatorRoleId]);
+    const cooldowns = new HostCooldownRepository(database);
+    const verifier = acceptingVerifier();
+    const service = new LiveServerService(
+      publishingClient(roles), repository, config, () => currentTime, verifier, undefined, cooldowns
+    );
+
+    const first = await service.create("guild", "moderator", previousType, newUrl);
+    if (!first.ok) throw new Error(first.message);
+    const firstCooldown = cooldowns.get("moderator")!;
+
+    currentTime += 60 * 60 * 1_000;
+    const second = await service.create("guild", "moderator", targetType, newUrl);
+    if (!second.ok) throw new Error(second.message);
+    const updatedCooldown = cooldowns.get("moderator")!;
+
+    expect(updatedCooldown.listingId).toBe(second.listing.id);
+    expect(updatedCooldown.successfulCreationAt).toBe(currentTime);
+    expect(updatedCooldown.nextEligibleAt).toBe(currentTime + HOST_COOLDOWN_MS);
+    expect(updatedCooldown.successfulCreationAt).toBeGreaterThan(firstCooldown.successfulCreationAt);
+  });
+
+  it("enforces the persisted cooldown again after the moderator role is removed", async () => {
+    let currentTime = 1_800_000_000_000;
+    const roles = new Set([config.moderatorRoleId]);
+    const cooldowns = new HostCooldownRepository(database);
+    const verifier = acceptingVerifier();
+    const service = new LiveServerService(
+      publishingClient(roles), repository, config, () => currentTime, verifier, undefined, cooldowns
+    );
+    expect((await service.create("guild", "moderator", "carmine", newUrl)).ok).toBe(true);
+
+    currentTime += 60 * 60 * 1_000;
+    roles.clear();
+    roles.add("administrator-role");
+    await expect(service.create("guild", "moderator", "xp", newUrl)).resolves.toEqual({
+      ok: false,
+      message: "You can host another server <t:1800010800:R>."
+    });
+    expect(verifier.verify).toHaveBeenCalledOnce();
+  });
+
+  it("does not let the moderator cooldown bypass override the host blacklist", async () => {
+    const verifier = acceptingVerifier();
+    const cooldowns = new HostCooldownRepository(database);
+    const service = new LiveServerService(
+      publishingClient(new Set([config.moderatorRoleId])),
+      repository,
+      config,
+      () => 1_800_000_000_000,
+      verifier,
+      { isHostBlacklisted: () => true },
+      cooldowns
+    );
+    await expect(service.create("guild", "moderator", "xp", newUrl)).resolves.toEqual({
+      ok: false,
+      message: "You are blacklisted from creating live-server announcements. Contact a moderator to appeal."
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+  });
+
+  it("does not let the moderator cooldown bypass override active-listing restrictions", async () => {
+    let currentTime = 1_800_000_000_000;
+    const verifier = acceptingVerifier();
+    const service = new LiveServerService(
+      publishingClient(new Set([config.moderatorRoleId])),
+      repository,
+      config,
+      () => currentTime,
+      verifier,
+      undefined,
+      new HostCooldownRepository(database)
+    );
+    expect((await service.create("guild", "moderator", "carmine", newUrl)).ok).toBe(true);
+    currentTime += 60 * 60 * 1_000;
+    await expect(service.create("guild", "moderator", "carmine", newUrl)).resolves.toEqual({
+      ok: false,
+      message: "You already have an active listing of this type. Use its existing control panel."
+    });
+    expect(verifier.verify).toHaveBeenCalledOnce();
   });
 
   it("does not consume cooldown on failed publication", async () => {

@@ -62,7 +62,7 @@ export class LiveServerService {
     return this.hostStatus.isHostBlacklisted(ownerId);
   }
 
-  checkHostingEligibility(ownerId: string): HostingEligibility {
+  checkHostingEligibility(ownerId: string, bypassCooldown = false): HostingEligibility {
     if (this.isHostBlacklisted(ownerId)) {
       return {
         ok: false,
@@ -70,7 +70,7 @@ export class LiveServerService {
       };
     }
     const cooldown = this.hostCooldowns.get(ownerId);
-    if (cooldown && cooldown.nextEligibleAt > this.now()) {
+    if (!bypassCooldown && cooldown && cooldown.nextEligibleAt > this.now()) {
       return {
         ok: false,
         message: `You can host another server <t:${Math.floor(cooldown.nextEligibleAt / 1_000)}:R>.`,
@@ -80,8 +80,8 @@ export class LiveServerService {
     return { ok: true };
   }
 
-  checkCreationEligibility(guildId: string, ownerId: string, type: ServerType): HostingEligibility {
-    const eligibility = this.checkHostingEligibility(ownerId);
+  checkCreationEligibility(guildId: string, ownerId: string, type: ServerType, bypassCooldown = false): HostingEligibility {
+    const eligibility = this.checkHostingEligibility(ownerId, bypassCooldown);
     if (!eligibility.ok) return eligibility;
     if (this.findActive(guildId, ownerId, type)) {
       return { ok: false, message: "You already have an active listing of this type. Use its existing control panel." };
@@ -103,9 +103,22 @@ export class LiveServerService {
     return channel;
   }
 
+  private async hasModeratorRole(guildId: string, userId: string): Promise<boolean> {
+    try {
+      const guild = await this.client.guilds.fetch(guildId);
+      const member = await guild.members.fetch(userId);
+      return member.roles.cache.has(this.config.moderatorRoleId);
+    } catch {
+      // Role lookup fails closed: inability to verify the exact configured role
+      // never grants a cooldown bypass.
+      return false;
+    }
+  }
+
   async create(guildId: string, ownerId: string, type: ServerType, url: string): Promise<ServiceResult> {
     return this.mutex.run(`owner:${guildId}:${ownerId}`, async () => {
-      const eligibility = this.checkCreationEligibility(guildId, ownerId, type);
+      const isModerator = await this.hasModeratorRole(guildId, ownerId);
+      const eligibility = this.checkCreationEligibility(guildId, ownerId, type, isModerator);
       if (!eligibility.ok) return { ok: false, message: eligibility.message };
 
       const verification = await this.privateServerVerifier.verify(url);
