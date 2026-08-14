@@ -1,0 +1,244 @@
+import type Database from "better-sqlite3";
+import type { Client } from "discord.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Config } from "../src/config.js";
+import type { Listing } from "../src/live-servers/model.js";
+import { LiveServerService } from "../src/live-servers/service.js";
+import type { PrivateServerVerifier } from "../src/roblox/private-server-verifier.js";
+import { ModerationService } from "../src/moderation/service.js";
+import type { StaffActor } from "../src/moderation/model.js";
+import { openDatabase } from "../src/storage/database.js";
+import { ListingRepository } from "../src/storage/listing-repository.js";
+import { ModerationRepository } from "../src/storage/moderation-repository.js";
+
+const config: Config = {
+  token: "token", clientId: "client", guildId: "guild", liveChannelId: "live",
+  commandsChannelId: "commands", carmineRoleId: "carmine-role", xpRoleId: "xp-role",
+  staffReportsChannelId: "staff", moderatorRoleId: "moderator-role",
+  databasePath: ":memory:", expirationPollMs: 15_000
+};
+const now = 1_800_000_000_000;
+const authorized: StaffActor = {
+  userId: "moderator", guildId: "guild", channelId: "staff", roleIds: ["moderator-role"]
+};
+
+describe("ModerationService", () => {
+  let database: Database.Database;
+  let listings: ListingRepository;
+  let repository: ModerationRepository;
+  let listing: Listing;
+  let send: ReturnType<typeof vi.fn>;
+  let edit: ReturnType<typeof vi.fn>;
+  let fetchMessage: ReturnType<typeof vi.fn>;
+  let client: Client;
+  let moderationEnd: ReturnType<typeof vi.fn>;
+  let service: ModerationService;
+
+  beforeEach(() => {
+    database = openDatabase(":memory:");
+    listings = new ListingRepository(database);
+    repository = new ModerationRepository(database);
+    listing = listings.create({
+      guildId: "guild", ownerId: "host", type: "xp",
+      url: "https://www.roblox.com/games/1962086868/Tower-of-Hell?privateServerLinkCode=ValidCode123",
+      liveChannelId: "live", liveMessageId: "live-message", controlChannelId: "commands",
+      controlMessageId: "control-message", createdAt: now, expiresAt: now + 7_200_000
+    });
+    edit = vi.fn(async (_payload: unknown) => undefined);
+    fetchMessage = vi.fn(async (_id: string) => ({ edit }));
+    send = vi.fn(async (_payload: unknown) => ({ id: "staff-message" }));
+    const channel = { isTextBased: () => true, isDMBased: () => false, send, messages: { fetch: fetchMessage } };
+    client = { channels: { fetch: vi.fn(async () => channel) } } as unknown as Client;
+    moderationEnd = vi.fn(async () => listing);
+    const liveServers = { moderationEnd } as unknown as LiveServerService;
+    service = new ModerationService(client, listings, repository, liveServers, config, () => now + 1_000);
+  });
+  afterEach(() => database.close());
+
+  async function reportSeven(): Promise<void> {
+    for (let index = 1; index <= 7; index += 1) {
+      const result = await service.report(listing.id, `reporter-${index}`, "guild", "server_missing", "");
+      expect(result.ok).toBe(true);
+    }
+  }
+
+  it("opening eligibility is read-only and completed submissions persist every supported reason", async () => {
+    expect(service.checkReportEligibility(listing.id, "candidate", "guild")).toEqual({
+      ok: true, message: "Eligible to report."
+    });
+    expect(repository.getReportCount(listing.id)).toBe(0);
+
+    const submissions = [
+      ["user-host", "host_not_in_server", ""],
+      ["user-missing", "server_missing", ""],
+      ["user-category", "wrong_category", "Optional context"],
+      ["user-other", "other", "Host keeps posting an expired link"]
+    ] as const;
+    for (const [userId, reason, details] of submissions) {
+      expect((await service.report(listing.id, userId, "guild", reason, details)).ok).toBe(true);
+    }
+    expect(repository.getReporterSummaries(listing.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: "user-host", reason: "host_not_in_server", details: null }),
+      expect.objectContaining({ userId: "user-missing", reason: "server_missing", details: null }),
+      expect.objectContaining({ userId: "user-category", reason: "wrong_category", details: "Optional context" }),
+      expect.objectContaining({ userId: "user-other", reason: "other", details: "Host keeps posting an expired link" })
+    ]));
+  });
+
+  it("rejects forged reasons, missing Other details, and oversized details without counting", async () => {
+    expect(await service.report(listing.id, "forged", "guild", "made_up", "details")).toEqual({
+      ok: false, message: "Select a valid report reason."
+    });
+    expect(await service.report(listing.id, "other-empty", "guild", "other", "   ")).toEqual({
+      ok: false, message: "Additional details are required when selecting Other."
+    });
+    expect(await service.report(listing.id, "too-long", "guild", "server_missing", "x".repeat(301))).toEqual({
+      ok: false, message: "Additional details must be 300 characters or fewer."
+    });
+    expect(repository.getReportCount(listing.id)).toBe(0);
+  });
+
+  it("posts one staff case at report seven and report eight only edits it", async () => {
+    for (let index = 1; index <= 6; index += 1) {
+      await service.report(listing.id, `reporter-${index}`, "guild", "server_missing", "");
+    }
+    expect(send).not.toHaveBeenCalled();
+
+    await service.report(listing.id, "reporter-7", "guild", "host_not_in_server", "");
+    expect(send).toHaveBeenCalledOnce();
+    expect(repository.getCase(listing.id)?.staffMessageId).toBe("staff-message");
+    expect(JSON.stringify(send.mock.calls[0]?.[0])).toContain("Server doesn't exist — 6");
+    expect(JSON.stringify(send.mock.calls[0]?.[0])).toContain("Host is not in the server — 1");
+
+    await service.report(listing.id, "reporter-8", "guild", "wrong_category", "");
+    expect(send).toHaveBeenCalledOnce();
+    expect(fetchMessage).toHaveBeenCalledWith("staff-message");
+    expect(edit).toHaveBeenCalledOnce();
+    expect(repository.getReportCount(listing.id)).toBe(8);
+    expect(JSON.stringify(edit.mock.calls[0]?.[0])).toContain("Incorrect category of grind — 1");
+  });
+
+  it("returns duplicate and blacklist messages without changing the count", async () => {
+    expect((await service.report(listing.id, "reporter", "guild", "server_missing", "")).message).toContain("1 unique report");
+    expect(await service.report(listing.id, "reporter", "guild", "wrong_category", "")).toEqual({
+      ok: false, message: "You have already reported this server."
+    });
+    expect(service.checkReportEligibility(listing.id, "reporter", "guild").message)
+      .toBe("You have already reported this server.");
+    repository.blacklistReporter("troll", "moderator", null, now);
+    expect(await service.report(listing.id, "troll", "guild", "server_missing", "")).toEqual({
+      ok: false, message: "You've been blacklisted from reporting. Contact a moderator to appeal."
+    });
+    expect(service.checkReportEligibility(listing.id, "troll", "guild").message)
+      .toBe("You've been blacklisted from reporting. Contact a moderator to appeal.");
+    expect(repository.getReportCount(listing.id)).toBe(1);
+  });
+
+  it("view reporters returns unique histories and supports safe target blacklisting", async () => {
+    await reportSeven();
+    const view = await service.viewReporters(listing.id, authorized);
+    expect(view.ok).toBe(true);
+    expect(view.reporters).toHaveLength(7);
+    expect(view.reporters?.[0]).toMatchObject({ userId: "reporter-1", total: 1, valid: 0, rejected: 0 });
+    expect(JSON.stringify(view.reportersPayload)).toContain(`lsmod:blacklist:${listing.id}`);
+
+    expect(await service.blacklistReporter(listing.id, "not-a-reporter", authorized)).toEqual({
+      ok: false, message: "That user is not a reporter on this moderation case."
+    });
+    expect((await service.blacklistReporter(listing.id, "reporter-1", authorized)).ok).toBe(true);
+    expect(repository.isReporterBlacklisted("reporter-1")).toBe(true);
+    expect((await service.blacklistReporter(listing.id, "reporter-1", authorized)).message).toBe("That reporter is already blacklisted.");
+  });
+
+  it("rejects every staff action from an unauthorized actor", async () => {
+    await reportSeven();
+    const unauthorized: StaffActor = { userId: "user", guildId: "guild", channelId: "staff", roleIds: [] };
+    expect((await service.viewReporters(listing.id, unauthorized)).message).toBe("You are not authorized to use moderation controls.");
+    expect((await service.blacklistReporter(listing.id, "reporter-1", unauthorized)).message).toBe("You are not authorized to use moderation controls.");
+    expect((await service.resolve(listing.id, "strike", unauthorized)).message).toBe("You are not authorized to use moderation controls.");
+    expect(repository.getCase(listing.id)?.status).toBe("open");
+    expect(moderationEnd).not.toHaveBeenCalled();
+  });
+
+  it("ignore and strike update histories, disable controls, and cannot resolve twice", async () => {
+    await reportSeven();
+    expect((await service.resolve(listing.id, "strike", authorized)).ok).toBe(true);
+    expect(repository.reporterHistory("reporter-1")).toEqual({ total: 1, valid: 1, rejected: 0 });
+    expect(repository.getHostStrikeCount("host")).toBe(1);
+    expect(moderationEnd).toHaveBeenCalledOnce();
+    expect(JSON.stringify(edit.mock.calls.at(-1)?.[0])).toContain('"disabled":true');
+    expect((await service.resolve(listing.id, "ignore", authorized)).message).toBe("This moderation case has already been resolved.");
+    expect(repository.getHostStrikeCount("host")).toBe(1);
+  });
+
+  it("restart reconciliation edits an existing case and never duplicates the staff message", async () => {
+    await reportSeven();
+    send.mockClear();
+    edit.mockClear();
+    await service.reconcileCases();
+    expect(send).not.toHaveBeenCalled();
+    expect(fetchMessage).toHaveBeenCalledWith("staff-message");
+    expect(edit).toHaveBeenCalledOnce();
+  });
+
+  it("keeps reporting controls and case state intact through Change Link and extension edits", async () => {
+    await reportSeven();
+    const replacementUrl = "https://www.roblox.com/share?code=Replacement123&type=Server";
+    const verifier: PrivateServerVerifier = {
+      verify: vi.fn(async () => ({
+        valid: true as const,
+        originalUrl: replacementUrl,
+        resolvedUrl: "https://www.roblox.com/share-links?code=Replacement123&type=Server",
+        placeId: "1962086868" as const
+      }))
+    };
+    const actionNow = () => listing.expiresAt - 5 * 60_000;
+    const liveService = new LiveServerService(client, listings, config, actionNow, verifier, repository);
+    const integratedModeration = new ModerationService(client, listings, repository, liveService, config, actionNow);
+
+    expect((await liveService.changeUrl(listing.id, "host", replacementUrl)).ok).toBe(true);
+    await integratedModeration.refreshCase(listing.id);
+    const beforeExtension = listings.get(listing.id)!;
+    expect((await liveService.extend(listing.id, "host")).ok).toBe(true);
+    await integratedModeration.refreshCase(listing.id);
+    const afterExtension = listings.get(listing.id)!;
+
+    expect(afterExtension.url).toBe(replacementUrl);
+    expect(afterExtension.expiresAt).toBe(beforeExtension.expiresAt + 3_600_000);
+    expect(repository.getReportCount(listing.id)).toBe(7);
+    expect(repository.listCases()).toHaveLength(1);
+    const editedPayloads = edit.mock.calls.map((call) => JSON.stringify(call[0]));
+    expect(editedPayloads.some((payload) => payload.includes(`lsreport:submit:${listing.id}`))).toBe(true);
+    expect(editedPayloads.some((payload) => payload.includes(replacementUrl))).toBe(true);
+  });
+
+  it("a host blacklisted at three strikes is rejected before URL verification or Discord publishing", async () => {
+    for (let strike = 1; strike <= 3; strike += 1) {
+      const session = strike === 1 ? listing : listings.create({
+        guildId: `guild-${strike}`,
+        ownerId: listing.ownerId,
+        type: listing.type,
+        url: listing.url,
+        liveChannelId: listing.liveChannelId,
+        liveMessageId: `live-${strike}`,
+        controlChannelId: listing.controlChannelId,
+        controlMessageId: `control-${strike}`,
+        createdAt: now + strike,
+        expiresAt: now + 7_200_000
+      });
+      for (let reporter = 1; reporter <= 7; reporter += 1) {
+        repository.submitReport(session, `s${strike}-r${reporter}`, "staff", now + reporter);
+      }
+      repository.resolveCase(session.id, "strike", "moderator", now + 100 + strike);
+    }
+    const verifier: PrivateServerVerifier = { verify: vi.fn() };
+    const noDiscordClient = { channels: { fetch: vi.fn() } } as unknown as Client;
+    const liveService = new LiveServerService(noDiscordClient, listings, config, () => now, verifier, repository);
+    const result = await liveService.create("new-guild", "host", "carmine", listing.url);
+    expect(result).toEqual({
+      ok: false,
+      message: "You are blacklisted from creating live-server announcements. Contact a moderator to appeal."
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+  });
+});

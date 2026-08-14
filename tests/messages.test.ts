@@ -43,6 +43,8 @@ describe("Discord message builders", () => {
     expect(componentsJson).toContain('"label":"Join Server"');
     expect(componentsJson).toContain('"style":5');
     expect(componentsJson).toContain(`"url":"${typedListing.url}"`);
+    expect(componentsJson).toContain(`"custom_id":"lsreport:submit:${typedListing.id}"`);
+    expect(componentsJson).toContain('"label":"Report"');
   });
 
   it("changes only the button URL when Change Link supplies an updated listing", () => {

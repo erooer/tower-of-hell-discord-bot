@@ -8,7 +8,9 @@ const validEnv = {
   LIVE_SERVERS_CHANNEL_ID: "3234567890123456789",
   SERVER_COMMANDS_CHANNEL_ID: "4234567890123456789",
   CARMINE_ROLE_ID: "5234567890123456789",
-  XP_ROLE_ID: "6234567890123456789"
+  XP_ROLE_ID: "6234567890123456789",
+  STAFF_REPORTS_CHANNEL_ID: "7234567890123456789",
+  MODERATOR_ROLE_ID: "8234567890123456789"
 };
 
 describe("loadConfig Discord snowflakes", () => {
@@ -17,6 +19,8 @@ describe("loadConfig Discord snowflakes", () => {
 
     expect(config.clientId).toBe(validEnv.DISCORD_CLIENT_ID);
     expect(config.guildId).toBe(validEnv.DISCORD_GUILD_ID);
+    expect(config.staffReportsChannelId).toBe(validEnv.STAFF_REPORTS_CHANNEL_ID);
+    expect(config.moderatorRoleId).toBe(validEnv.MODERATOR_ROLE_ID);
   });
 
   it.each([

@@ -4,21 +4,43 @@ import {
   type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Client,
-  type ModalSubmitInteraction
+  type ModalSubmitInteraction,
+  type StringSelectMenuInteraction
 } from "discord.js";
 import type { Config } from "../config.js";
 import type { ServerType } from "../live-servers/model.js";
 import type { LiveServerService } from "../live-servers/service.js";
 import { normalizePrivateServerUrl } from "../live-servers/url.js";
-import { createPrivateServerUrlModal, PRIVATE_SERVER_URL_INPUT_ID } from "./modals.js";
+import {
+  createLiveServerReportModal,
+  createPrivateServerUrlModal,
+  PRIVATE_SERVER_URL_INPUT_ID,
+  REPORT_DETAILS_INPUT_ID,
+  REPORT_REASON_INPUT_ID
+} from "./modals.js";
+import type { ModerationService } from "../moderation/service.js";
+import type { StaffActor } from "../moderation/model.js";
 
 
-export function registerInteractionRouter(client: Client, service: LiveServerService, config: Config): void {
+export function registerInteractionRouter(
+  client: Client,
+  service: LiveServerService,
+  moderation: ModerationService,
+  config: Config
+): void {
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
       if (interaction.isChatInputCommand()) await handleCommand(interaction, service, config);
-      else if (interaction.isButton() && interaction.customId.startsWith("lsv1:")) await handleButton(interaction, service);
-      else if (interaction.isModalSubmit() && interaction.customId.startsWith("lsv1:")) await handleModal(interaction, service, config);
+      else if (interaction.isButton() && interaction.customId.startsWith("lsreport:")) await handleReportButton(interaction, moderation);
+      else if (interaction.isModalSubmit() && interaction.customId.startsWith("lsreport:form:")) {
+        await handleReportModal(interaction, moderation);
+      }
+      else if (interaction.isButton() && interaction.customId.startsWith("lsmod:")) await handleModerationButton(interaction, moderation);
+      else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("lsmod:blacklist:")) {
+        await handleBlacklistSelect(interaction, moderation);
+      }
+      else if (interaction.isButton() && interaction.customId.startsWith("lsv1:")) await handleButton(interaction, service, moderation);
+      else if (interaction.isModalSubmit() && interaction.customId.startsWith("lsv1:")) await handleModal(interaction, service, moderation, config);
     } catch (error) {
       console.error("Unhandled interaction error", error);
       const response = { content: "Something went wrong while handling that request. Please try again.", flags: MessageFlags.Ephemeral } as const;
@@ -30,6 +52,80 @@ export function registerInteractionRouter(client: Client, service: LiveServerSer
   });
 }
 
+async function handleReportButton(interaction: ButtonInteraction, moderation: ModerationService): Promise<void> {
+  const [, action, sessionId] = interaction.customId.split(":");
+  if (action !== "submit" || !sessionId) return;
+  const eligibility = moderation.checkReportEligibility(sessionId, interaction.user.id, interaction.guildId);
+  if (!eligibility.ok) {
+    await interaction.reply({ content: eligibility.message, flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.showModal(createLiveServerReportModal(sessionId));
+}
+
+async function handleReportModal(
+  interaction: ModalSubmitInteraction,
+  moderation: ModerationService
+): Promise<void> {
+  const [, action, sessionId] = interaction.customId.split(":");
+  if (action !== "form" || !sessionId) return;
+  let reason: string;
+  let details: string;
+  try {
+    reason = interaction.fields.getStringSelectValues(REPORT_REASON_INPUT_ID)[0] ?? "";
+    details = interaction.fields.getTextInputValue(REPORT_DETAILS_INPUT_ID);
+  } catch {
+    await interaction.reply({ content: "Select a valid report reason.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const result = await moderation.report(sessionId, interaction.user.id, interaction.guildId, reason, details);
+  await interaction.editReply(result.message);
+}
+
+async function handleModerationButton(interaction: ButtonInteraction, moderation: ModerationService): Promise<void> {
+  const [, action, sessionId] = interaction.customId.split(":");
+  if (!action || !sessionId) return;
+  const actor = staffActor(interaction);
+  if (action === "view") {
+    const result = await moderation.viewReporters(sessionId, actor);
+    if (!result.ok || !result.reportersPayload) {
+      await interaction.reply({ content: result.message, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await interaction.reply({ ...result.reportersPayload, flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const result = action === "ignore" || action === "strike"
+    ? await moderation.resolve(sessionId, action, actor)
+    : { ok: false, message: "Unknown moderation control." };
+  await interaction.editReply(result.message);
+}
+
+async function handleBlacklistSelect(
+  interaction: StringSelectMenuInteraction,
+  moderation: ModerationService
+): Promise<void> {
+  const [, action, sessionId] = interaction.customId.split(":");
+  const reporterId = interaction.values[0];
+  if (action !== "blacklist" || !sessionId || !reporterId) return;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const result = await moderation.blacklistReporter(sessionId, reporterId, staffActor(interaction));
+  await interaction.editReply(result.message);
+}
+
+function staffActor(interaction: ButtonInteraction | StringSelectMenuInteraction): StaffActor {
+  const roles = interaction.member?.roles;
+  const roleIds = Array.isArray(roles) ? roles : roles?.cache.map((role) => role.id) ?? [];
+  return {
+    userId: interaction.user.id,
+    guildId: interaction.guildId,
+    channelId: interaction.channelId,
+    roleIds
+  };
+}
+
 async function handleCommand(interaction: ChatInputCommandInteraction, service: LiveServerService, config: Config): Promise<void> {
   if (interaction.commandName !== "carmine" && interaction.commandName !== "xp") return;
   if (interaction.channelId !== config.commandsChannelId || interaction.guildId !== config.guildId) {
@@ -37,6 +133,13 @@ async function handleCommand(interaction: ChatInputCommandInteraction, service: 
     return;
   }
   const type: ServerType = interaction.commandName;
+  if (service.isHostBlacklisted(interaction.user.id)) {
+    await interaction.reply({
+      content: "You are blacklisted from creating live-server announcements. Contact a moderator to appeal.",
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
   if (service.findActive(interaction.guildId, interaction.user.id, type)) {
     await interaction.reply({ content: "You already have an active listing of this type. Use its existing control panel.", flags: MessageFlags.Ephemeral });
     return;
@@ -47,7 +150,11 @@ async function handleCommand(interaction: ChatInputCommandInteraction, service: 
   ));
 }
 
-async function handleButton(interaction: ButtonInteraction, service: LiveServerService): Promise<void> {
+async function handleButton(
+  interaction: ButtonInteraction,
+  service: LiveServerService,
+  moderation: ModerationService
+): Promise<void> {
   const [, action, id] = interaction.customId.split(":");
   if (!id || !action) return;
   const listing = service.get(id);
@@ -69,10 +176,16 @@ async function handleButton(interaction: ButtonInteraction, service: LiveServerS
     : action === "end"
       ? await service.end(id, interaction.user.id)
       : { ok: false as const, message: "Unknown control." };
+  if (result.ok && action === "extend") await moderation.refreshCase(id);
   await interaction.editReply(result.message ?? "Done.");
 }
 
-async function handleModal(interaction: ModalSubmitInteraction, service: LiveServerService, config: Config): Promise<void> {
+async function handleModal(
+  interaction: ModalSubmitInteraction,
+  service: LiveServerService,
+  moderation: ModerationService,
+  config: Config
+): Promise<void> {
   const [, action, value] = interaction.customId.split(":");
   if (!action || !value) return;
   if (interaction.channelId !== config.commandsChannelId || interaction.guildId !== config.guildId) {
@@ -95,6 +208,7 @@ async function handleModal(interaction: ModalSubmitInteraction, service: LiveSer
   }
   if (action === "change") {
     const result = await service.changeUrl(value, interaction.user.id, url);
+    if (result.ok) await moderation.refreshCase(value);
     await interaction.editReply(result.message ?? "Done.");
   }
 }

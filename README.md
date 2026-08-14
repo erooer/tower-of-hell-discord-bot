@@ -8,8 +8,8 @@ The SQLite database is the source of truth. Every listing stores its Discord mes
 
 - Node.js 20 or newer
 - A Discord application with a bot user
-- Two text channels: `#live-servers` and `#server-bot-cmds`
-- Two ping roles: Carmine Hunt and XP Grinding
+- Three text channels: `#live-servers`, `#server-bot-cmds`, and a staff-only reports channel
+- Three roles: Carmine Hunt ping, XP Grinding ping, and a moderator/staff role
 
 No privileged gateway intents are required. In the Developer Portal, the bot only uses the standard `Guilds` and `Guild Messages` intents; Message Content, Server Members, and Presence can remain off.
 
@@ -27,11 +27,13 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
    - `SERVER_COMMANDS_CHANNEL_ID`: ID of `#server-bot-cmds`
    - `CARMINE_ROLE_ID`: role pinged by `/carmine`
    - `XP_ROLE_ID`: role pinged by `/xp`
+   - `STAFF_REPORTS_CHANNEL_ID`: staff-only channel receiving escalated report cases
+   - `MODERATOR_ROLE_ID`: role pinged on escalation and required for all moderation controls
    - `DISCORD_GUILD_ID`: server ID
    - `DISCORD_CLIENT_ID`: application ID from the Developer Portal
    - `DISCORD_TOKEN`: bot token; never commit this value
 
-3. Invite the bot using the OAuth2 scopes `bot` and `applications.commands`. Give it these channel permissions in both configured channels:
+3. Invite the bot using the OAuth2 scopes `bot` and `applications.commands`. Give it these channel permissions in all configured channels:
 
    - View Channel
    - Send Messages
@@ -41,6 +43,8 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
    To ping roles that are not marked **Allow anyone to @mention this role**, also grant **Mention @everyone, @here, and All Roles**. The bot only deletes its own live messages, so **Manage Messages** is not required.
 
 4. Ensure ordinary users cannot post in `#live-servers`. Give only approved private-server owners access to `#server-bot-cmds`, as intended by the server's role permissions.
+
+   Keep `STAFF_REPORTS_CHANNEL_ID` staff-only. The bot additionally verifies the configured moderator role, guild, and staff channel on every moderation button/select interaction; channel visibility alone is not trusted.
 
 5. Register the guild commands (guild registration updates quickly):
 
@@ -74,6 +78,12 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 - Ending or expiration deletes the live message and disables the control panel. Nothing is posted to the live channel afterward.
 - If the live message is manually deleted, the record is ended and its control panel is disabled.
 - Transient Discord deletion/edit failures are logged; pending cleanup is retried every expiration sweep.
+- Each live announcement has a public Report button. It opens a modal with a required reason (`host_not_in_server`, `server_missing`, `wrong_category`, or `other`) and optional details. `Other` requires details. Opening or cancelling the modal does not count; only a validated submission is stored.
+- Report records retain the stable reason ID and up to 300 characters of optional detail. Existing databases are migrated automatically with nullable columns, so older reasonless reports remain valid history.
+- Seven unique reports create exactly one persistent staff case and ping `MODERATOR_ROLE_ID`. Later reports update that same message.
+- Staff cases show aggregated reason totals. Staff can inspect each reporter's reason, details, and history; blacklist troll reporters; ignore reports; or strike/remove the server. Ignored reports become rejected history; struck reports become valid history.
+- One struck session can create only one host strike. At three active strikes, the host is persistently blocked from creating new listings.
+- Reports, outcomes, cases, blacklists, and strike history share the SQLite database and are reconciled without duplicate case messages after restart.
 
 ## Automated checks
 

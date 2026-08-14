@@ -19,7 +19,12 @@ export function liveMessage(listing: Listing, roleId: string): MessageCreateOpti
     new ButtonBuilder()
       .setLabel("Join Server")
       .setStyle(ButtonStyle.Link)
-      .setURL(listing.url)
+      .setURL(listing.url),
+    new ButtonBuilder()
+      .setCustomId(`lsreport:submit:${listing.id}`)
+      .setLabel("Report")
+      .setEmoji("⚠️")
+      .setStyle(ButtonStyle.Danger)
   );
   return {
     content: `<@&${roleId}>`,

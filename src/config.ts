@@ -16,6 +16,8 @@ const schema = z.object({
   SERVER_COMMANDS_CHANNEL_ID: snowflake,
   CARMINE_ROLE_ID: snowflake,
   XP_ROLE_ID: snowflake,
+  STAFF_REPORTS_CHANNEL_ID: snowflake,
+  MODERATOR_ROLE_ID: snowflake,
   DATABASE_PATH: z.string().min(1).default("./data/live-servers.sqlite"),
   EXPIRATION_POLL_MS: z.coerce.number().int().min(5_000).default(15_000)
 });
@@ -28,6 +30,8 @@ export type Config = {
   commandsChannelId: string;
   carmineRoleId: string;
   xpRoleId: string;
+  staffReportsChannelId: string;
+  moderatorRoleId: string;
   databasePath: string;
   expirationPollMs: number;
 };
@@ -47,6 +51,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     commandsChannelId: value.SERVER_COMMANDS_CHANNEL_ID,
     carmineRoleId: value.CARMINE_ROLE_ID,
     xpRoleId: value.XP_ROLE_ID,
+    staffReportsChannelId: value.STAFF_REPORTS_CHANNEL_ID,
+    moderatorRoleId: value.MODERATOR_ROLE_ID,
     databasePath: value.DATABASE_PATH,
     expirationPollMs: value.EXPIRATION_POLL_MS
   };

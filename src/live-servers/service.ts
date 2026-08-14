@@ -18,6 +18,10 @@ import {
 
 export type ServiceResult = { ok: true; listing: Listing; message?: string } | { ok: false; message: string };
 
+export interface HostStatusProvider {
+  isHostBlacklisted(userId: string): boolean;
+}
+
 function isUnknownMessage(error: unknown): boolean {
   return error instanceof DiscordAPIError && error.code === 10008;
 }
@@ -30,7 +34,8 @@ export class LiveServerService {
     private readonly repository: ListingRepository,
     private readonly config: Config,
     private readonly now: () => number = Date.now,
-    private readonly privateServerVerifier: PrivateServerVerifier = new RobloxPrivateServerVerifier()
+    private readonly privateServerVerifier: PrivateServerVerifier = new RobloxPrivateServerVerifier(),
+    private readonly hostStatus: HostStatusProvider = { isHostBlacklisted: () => false }
   ) {}
 
   findActive(guildId: string, ownerId: string, type: ServerType): Listing | null {
@@ -39,6 +44,10 @@ export class LiveServerService {
 
   get(id: string): Listing | null {
     return this.repository.get(id);
+  }
+
+  isHostBlacklisted(ownerId: string): boolean {
+    return this.hostStatus.isHostBlacklisted(ownerId);
   }
 
   private roleId(type: ServerType): string {
@@ -55,6 +64,9 @@ export class LiveServerService {
     return this.mutex.run(`owner:${guildId}:${ownerId}:${type}`, async () => {
       const existing = this.findActive(guildId, ownerId, type);
       if (existing) return { ok: false, message: "You already have an active listing of this type. Use its control panel instead." };
+      if (this.isHostBlacklisted(ownerId)) {
+        return { ok: false, message: "You are blacklisted from creating live-server announcements. Contact a moderator to appeal." };
+      }
 
       const verification = await this.privateServerVerifier.verify(url);
       if (!verification.valid) return { ok: false, message: this.verificationFailureMessage(verification) };
@@ -152,6 +164,16 @@ export class LiveServerService {
       const ended = this.repository.deactivate(id, "owner_ended", this.now())!;
       await this.cleanup(id);
       return { ok: true, listing: ended, message: "Your server listing has ended." };
+    });
+  }
+
+  async moderationEnd(id: string): Promise<Listing | null> {
+    return this.mutex.run(id, async () => {
+      const listing = this.repository.get(id);
+      if (!listing || !listing.active) return listing;
+      const ended = this.repository.deactivate(id, "moderation_strike", this.now());
+      await this.cleanup(id);
+      return ended;
     });
   }
 

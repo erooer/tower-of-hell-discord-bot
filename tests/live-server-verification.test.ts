@@ -13,6 +13,7 @@ const newUrl = "https://www.roblox.com/share?code=NewCode12345&type=Server";
 const config: Config = {
   token: "token", clientId: "client", guildId: "guild", liveChannelId: "live",
   commandsChannelId: "controls", carmineRoleId: "carmine-role", xpRoleId: "xp-role",
+  staffReportsChannelId: "staff", moderatorRoleId: "moderator-role",
   databasePath: ":memory:", expirationPollMs: 15_000
 };
 
