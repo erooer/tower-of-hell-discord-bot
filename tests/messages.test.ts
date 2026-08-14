@@ -49,6 +49,40 @@ describe("Discord message builders", () => {
     expect(componentsJson).not.toContain('"label":"Report"');
   });
 
+  it("builds the Event announcement with its dedicated text, activity, role ping, and controls", () => {
+    const eventListing = { ...listing, type: "event" as const };
+    const message = liveMessage(eventListing, "event-role");
+    const embed = firstEmbed(message);
+    expect(message.content).toBe("<@&event-role>");
+    expect(message.allowedMentions).toEqual({ roles: ["event-role"], users: [], repliedUser: false });
+    expect(embed).toMatchObject({
+      title: "Event Session",
+      description: "An event is currently being hosted!",
+      fields: [
+        { name: "Host", value: "<@12345678901234567>", inline: true },
+        { name: "Activity", value: "Event", inline: true },
+        { name: "Started", value: "<t:1800000000:t>", inline: true },
+        { name: "Expires", value: "<t:1800007200:R>", inline: true },
+        { name: "Reports", value: "⚠️ 0/7", inline: true }
+      ]
+    });
+    const json = JSON.stringify(message);
+    expect(json).toContain('"label":"Join Server"');
+    expect(json).toContain(eventListing.url);
+    expect(json).not.toContain("carmine-role");
+    expect(json).not.toContain("xp-role");
+  });
+
+  it("preserves Event presentation while changing its URL or expiration", () => {
+    const eventListing = { ...listing, type: "event" as const };
+    const changed = liveMessage({ ...eventListing, url: "https://www.roblox.com/share?code=EventNew&type=Server" }, "event-role");
+    const extended = liveMessage({ ...eventListing, expiresAt: eventListing.expiresAt + 3_600_000 }, "event-role");
+    expect(JSON.stringify(changed)).toContain("EventNew");
+    expect(firstEmbed(changed)).toMatchObject({ title: "Event Session", description: "An event is currently being hosted!" });
+    expect(firstEmbed(extended).fields).toContainEqual({ name: "Expires", value: "<t:1800010800:R>", inline: true });
+    expect(JSON.stringify(extended.components)).toContain(eventListing.url);
+  });
+
   it.each([0, 1, 6, 7, 8, 10])("displays the real unique report count %i against the threshold", (count) => {
     const embed = firstEmbed(liveMessage(listing, "98765432109876543", count));
     expect(embed.fields?.[3]).toEqual({ name: "Reports", value: `⚠️ ${count}/7`, inline: true });

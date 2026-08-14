@@ -9,12 +9,13 @@ import { openDatabase } from "../src/storage/database.js";
 import { ListingRepository } from "../src/storage/listing-repository.js";
 import { HostCooldownRepository, HOST_COOLDOWN_MS } from "../src/storage/host-cooldown-repository.js";
 import { ModerationRepository } from "../src/storage/moderation-repository.js";
+import type { SessionLogger } from "../src/logging/session-logger.js";
 
 const oldUrl = "https://www.roblox.com/games/1962086868/Tower-of-Hell?privateServerLinkCode=OldCode12345";
 const newUrl = "https://www.roblox.com/share?code=NewCode12345&type=Server";
 const config: Config = {
   token: "token", clientId: "client", guildId: "guild", liveChannelId: "live",
-  commandsChannelId: "controls", carmineRoleId: "carmine-role", xpRoleId: "xp-role",
+  commandsChannelId: "controls", carmineRoleId: "carmine-role", xpRoleId: "xp-role", eventRoleId: "event-role",
   staffReportsChannelId: "staff", sessionLogsChannelId: "logs", moderatorRoleId: "moderator-role",
   databasePath: ":memory:", expirationPollMs: 15_000
 };
@@ -353,5 +354,93 @@ describe("LiveServerService verification boundary", () => {
     expect(JSON.stringify(recoveredPayload)).toContain('"label":"Join Server"');
     expect(JSON.stringify(recoveredPayload)).toContain('"style":5');
     expect(JSON.stringify(recoveredPayload)).toContain(oldUrl);
+  });
+
+  it("runs Event through creation, link change, extension, reconciliation, host/mod ending, and expiration", async () => {
+    let currentTime = 1_800_000_000_000;
+    const roles = new Set<string>();
+    const liveEdit = vi.fn(async (_payload: unknown) => undefined);
+    const controlEdit = vi.fn(async (_payload: unknown) => undefined);
+    const liveDelete = vi.fn(async () => undefined);
+    const controlDelete = vi.fn(async () => undefined);
+    const liveSend = vi.fn(async (_payload: unknown) => ({ id: "event-live" }));
+    const controlSend = vi.fn(async (_payload: unknown) => ({ id: "event-control" }));
+    const liveChannel = {
+      isTextBased: () => true, isDMBased: () => false, send: liveSend,
+      messages: { fetch: vi.fn(async () => ({ edit: liveEdit, delete: liveDelete })) }
+    };
+    const controlChannel = {
+      isTextBased: () => true, isDMBased: () => false, send: controlSend,
+      messages: { fetch: vi.fn(async () => ({ edit: controlEdit, delete: controlDelete })) }
+    };
+    const client = {
+      channels: { fetch: vi.fn(async (id: string) => id === "live" ? liveChannel : controlChannel) },
+      guilds: { fetch: vi.fn(async () => ({ members: { fetch: vi.fn(async () => ({
+        roles: { cache: { has: (role: string) => roles.has(role) } }
+      })) } })) }
+    } as unknown as Client;
+    const events: any[] = [];
+    const logger = { log: vi.fn(async (event) => { events.push(event); }) } as SessionLogger;
+    const service = new LiveServerService(
+      client, repository, config, () => currentTime, acceptingVerifier(), undefined,
+      new HostCooldownRepository(database), logger
+    );
+
+    const created = await service.create("guild", "event-host", "event", oldUrl);
+    if (!created.ok) throw new Error(created.message);
+    expect(created.listing.type).toBe("event");
+    expect(liveSend).toHaveBeenCalledWith(expect.objectContaining({
+      content: "<@&event-role>", allowedMentions: { roles: ["event-role"], users: [], repliedUser: false }
+    }));
+    const createdJson = JSON.stringify(liveSend.mock.calls[0]?.[0]);
+    expect(createdJson).toContain('"title":"Event Session"');
+    expect(createdJson).toContain("An event is currently being hosted!");
+    expect(createdJson).toContain('"label":"Join Server"');
+    expect(createdJson).not.toContain("carmine-role");
+    expect(createdJson).not.toContain("xp-role");
+
+    expect((await service.changeUrl(created.listing.id, "event-host", newUrl)).ok).toBe(true);
+    expect(JSON.stringify(liveEdit.mock.calls.at(-1)?.[0])).toContain(newUrl);
+    currentTime = created.listing.expiresAt - 5 * 60_000;
+    const extended = await service.extend(created.listing.id, "event-host");
+    expect(extended.ok).toBe(true);
+    if (!extended.ok) return;
+    expect(extended.listing.expiresAt).toBe(created.listing.expiresAt + 3_600_000);
+    expect(JSON.stringify(liveEdit.mock.calls.at(-1)?.[0])).toContain("Event Session");
+
+    const logsBeforeReconcile = events.length;
+    await service.reconcileActive();
+    expect(events).toHaveLength(logsBeforeReconcile);
+    const reconciled = JSON.stringify(liveEdit.mock.calls.at(-1)?.[0]);
+    expect(reconciled).toContain("<@&event-role>");
+    expect(reconciled).toContain(newUrl);
+    expect((await service.end(created.listing.id, "event-host")).ok).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({
+      title: "Session Ended", listing: expect.objectContaining({ type: "event", ownerId: "event-host" }),
+      actor: { kind: "host", userId: "event-host" }
+    }));
+
+    const moderatorListing = repository.create({
+      guildId: "guild", ownerId: "other-host", type: "event", url: oldUrl,
+      liveChannelId: "live", liveMessageId: "mod-live", controlChannelId: "controls",
+      controlMessageId: "mod-control", createdAt: currentTime, expiresAt: currentTime + 7_200_000
+    });
+    roles.add(config.moderatorRoleId);
+    expect((await service.end(moderatorListing.id, "moderator")).ok).toBe(true);
+    expect(events).toContainEqual(expect.objectContaining({
+      title: "Session Ended", listing: expect.objectContaining({ type: "event", ownerId: "other-host" }),
+      actor: { kind: "moderator", userId: "moderator" }
+    }));
+
+    const expired = repository.create({
+      guildId: "guild-2", ownerId: "expired-host", type: "event", url: oldUrl,
+      liveChannelId: "live", liveMessageId: "expired-live", controlChannelId: "controls",
+      controlMessageId: "expired-control", createdAt: currentTime - 7_200_000, expiresAt: currentTime
+    });
+    await service.expire(expired.id);
+    expect(repository.get(expired.id)?.active).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({
+      title: "Session Ended", listing: expect.objectContaining({ type: "event" }), actor: { kind: "automatic" }
+    }));
   });
 });

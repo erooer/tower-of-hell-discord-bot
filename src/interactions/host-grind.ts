@@ -10,7 +10,7 @@ export const HOST_GRIND_SELECT_ID = "lshost:type";
 export function hostGrindSelector(): InteractionReplyOptions {
   const selector = new StringSelectMenuBuilder()
     .setCustomId(HOST_GRIND_SELECT_ID)
-    .setPlaceholder("Choose a grind type")
+    .setPlaceholder("Choose a session type")
     .setMinValues(1)
     .setMaxValues(1)
     .addOptions(
@@ -21,10 +21,14 @@ export function hostGrindSelector(): InteractionReplyOptions {
       new StringSelectMenuOptionBuilder()
         .setLabel("XP Grinding")
         .setEmoji("⚡")
-        .setValue("xp")
+        .setValue("xp"),
+      new StringSelectMenuOptionBuilder()
+        .setLabel("Event")
+        .setEmoji("🎉")
+        .setValue("event")
     );
   return {
-    content: "What type of grind do you want to host?",
+    content: "What type of session do you want to host?",
     components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selector)]
   };
 }

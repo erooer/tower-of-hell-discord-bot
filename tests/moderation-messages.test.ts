@@ -73,6 +73,17 @@ describe("moderation message builders", () => {
     expect(JSON.stringify(urgentCaseMessage(snapshot, "moderator-role", false).components).match(/"disabled":true/g)).toHaveLength(4);
   });
 
+  it("preserves Event as the activity type in moderation panels", () => {
+    const snapshot: CaseSnapshot = {
+      case: moderationCase, listing: { ...listing, type: "event" }, reportCount: 1,
+      hostStrikeCount: 0, reasonCounts: [{ reason: "other", count: 1 }]
+    };
+    const json = JSON.stringify(staffCaseMessage(snapshot));
+    expect(json).toContain('"name":"Activity","value":"Event"');
+    expect(json).not.toContain("XP Grinding");
+    expect(json).not.toContain("Carmine Hunting");
+  });
+
   it("builds an ephemeral-compatible reporter history and blacklist selector", () => {
     const payload = reportersReply("session-id", [
       { userId: "user-1", reportedAt: 1, total: 8, valid: 5, rejected: 3, reason: "server_missing", details: null },

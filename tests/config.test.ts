@@ -9,6 +9,7 @@ const validEnv = {
   SERVER_COMMANDS_CHANNEL_ID: "4234567890123456789",
   CARMINE_ROLE_ID: "5234567890123456789",
   XP_ROLE_ID: "6234567890123456789",
+  EVENT_ROLE_ID: "6734567890123456789",
   STAFF_REPORTS_CHANNEL_ID: "7234567890123456789",
   SESSION_LOGS_CHANNEL_ID: "7734567890123456789",
   MODERATOR_ROLE_ID: "8234567890123456789"
@@ -23,6 +24,7 @@ describe("loadConfig Discord snowflakes", () => {
     expect(config.staffReportsChannelId).toBe(validEnv.STAFF_REPORTS_CHANNEL_ID);
     expect(config.sessionLogsChannelId).toBe(validEnv.SESSION_LOGS_CHANNEL_ID);
     expect(config.moderatorRoleId).toBe(validEnv.MODERATOR_ROLE_ID);
+    expect(config.eventRoleId).toBe(validEnv.EVENT_ROLE_ID);
   });
 
   it.each([
@@ -41,5 +43,11 @@ describe("loadConfig Discord snowflakes", () => {
     const { SESSION_LOGS_CHANNEL_ID: _removed, ...missing } = validEnv;
     expect(() => loadConfig(missing)).toThrow(/SESSION_LOGS_CHANNEL_ID/);
     expect(() => loadConfig({ ...validEnv, SESSION_LOGS_CHANNEL_ID: "not-an-id" })).toThrow(/SESSION_LOGS_CHANNEL_ID/);
+  });
+
+  it("requires a valid Event ping role ID", () => {
+    const { EVENT_ROLE_ID: _removed, ...missing } = validEnv;
+    expect(() => loadConfig(missing)).toThrow(/EVENT_ROLE_ID/);
+    expect(() => loadConfig({ ...validEnv, EVENT_ROLE_ID: "not-an-id" })).toThrow(/EVENT_ROLE_ID/);
   });
 });

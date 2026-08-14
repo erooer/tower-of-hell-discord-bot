@@ -9,7 +9,10 @@ import {
 import type { HostCooldown } from "../storage/host-cooldown-repository.js";
 import type { HostModerationStatus } from "../storage/moderation-repository.js";
 
-export type HostStatusAction = "strike" | "host-unblacklist" | "reporter-unblacklist" | "cooldown";
+export type HostStatusAction = "strike-add" | "strike-remove"
+  | "host-blacklist" | "host-unblacklist"
+  | "reporter-blacklist" | "reporter-unblacklist"
+  | "cooldown-add" | "cooldown-clear";
 
 export type HostStatusSnapshot = {
   userId: string;
@@ -49,36 +52,35 @@ export function hostStatusMessage(
       { name: "Reporter Blacklisted At", value: date(moderation.reporterBlacklistedAt), inline: true }
     );
 
-  const buttons: ButtonBuilder[] = [];
-  if (moderation.latestActiveStrikeId) {
-    buttons.push(new ButtonBuilder()
-      .setCustomId(`hoststatus:strike:${userId}:${moderation.latestActiveStrikeId}`)
+  const buttons = [
+    new ButtonBuilder()
+      .setCustomId(`hoststatus:strike-add:${userId}:${moderation.strikeCount}`)
+      .setLabel("Add Strike")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(moderation.strikeCount >= 3),
+    new ButtonBuilder()
+      .setCustomId(`hoststatus:strike-remove:${userId}:${moderation.latestActiveStrikeId ?? "none"}`)
       .setLabel("Remove Strike")
-      .setStyle(ButtonStyle.Danger));
-  }
-  if (moderation.hostBlacklisted) {
-    buttons.push(new ButtonBuilder()
-      .setCustomId(`hoststatus:host-unblacklist:${userId}`)
-      .setLabel("Remove Host Blacklist")
-      .setStyle(ButtonStyle.Secondary));
-  }
-  if (moderation.reporterBlacklisted) {
-    buttons.push(new ButtonBuilder()
-      .setCustomId(`hoststatus:reporter-unblacklist:${userId}`)
-      .setLabel("Remove Reporter Blacklist")
-      .setStyle(ButtonStyle.Secondary));
-  }
-  if (cooldownActive) {
-    buttons.push(new ButtonBuilder()
-      .setCustomId(`hoststatus:cooldown:${userId}`)
-      .setLabel("Clear Cooldown")
-      .setStyle(ButtonStyle.Secondary));
-  }
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(moderation.strikeCount <= 0),
+    new ButtonBuilder()
+      .setCustomId(`hoststatus:${moderation.hostBlacklisted ? "host-unblacklist" : "host-blacklist"}:${userId}`)
+      .setLabel(moderation.hostBlacklisted ? "Remove Host Blacklist" : "Add Host Blacklist")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`hoststatus:${moderation.reporterBlacklisted ? "reporter-unblacklist" : "reporter-blacklist"}:${userId}`)
+      .setLabel(moderation.reporterBlacklisted ? "Remove Reporter Blacklist" : "Add Reporter Blacklist")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`hoststatus:${cooldownActive ? "cooldown-clear" : "cooldown-add"}:${userId}:${cooldownActive && cooldown ? cooldown.successfulCreationAt : "none"}`)
+      .setLabel(cooldownActive ? "Clear Cooldown" : "Add Cooldown")
+      .setStyle(ButtonStyle.Secondary)
+  ];
 
   return {
     content: notice ?? "",
     allowedMentions: { users: [], roles: [], repliedUser: false },
     embeds: [embed],
-    components: buttons.length ? [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)] : []
+    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)]
   };
 }

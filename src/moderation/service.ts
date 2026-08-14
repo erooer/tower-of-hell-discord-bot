@@ -9,7 +9,7 @@ import type { ModerationRepository } from "../storage/moderation-repository.js";
 import { isReportReason } from "./model.js";
 import type { HostCooldownStore } from "../storage/host-cooldown-repository.js";
 import { hostStatusMessage, type HostStatusAction } from "./host-status.js";
-import { NO_SESSION_LOGGER, type SessionLogEvent, type SessionLogger } from "../logging/session-logger.js";
+import { NO_SESSION_LOGGER, type LogEvent, type SessionLogger } from "../logging/session-logger.js";
 
 function isUnknownMessage(error: unknown): boolean {
   return error instanceof DiscordAPIError && error.code === 10008;
@@ -55,31 +55,61 @@ export class ModerationService {
   async updateHostStatus(
     userId: string,
     action: HostStatusAction,
-    strikeId: string | null,
+    stateToken: string | null,
     actor: StaffActor
   ): Promise<ModerationResult> {
     const unauthorized = await this.authorizeCurrentModerator(actor);
     if (unauthorized) return unauthorized;
     return this.mutex.run(`host-status:${userId}`, async () => {
+      const occurredAt = this.now();
       let changed = false;
       let message: string;
-      if (action === "strike") {
-        changed = Boolean(strikeId) && this.moderation.revokeStrike(userId, strikeId!, actor.userId, this.now());
+      if (action === "strike-add") {
+        const expectedCount = Number(stateToken);
+        changed = Number.isInteger(expectedCount)
+          && this.moderation.addHostStrike(userId, actor.userId, occurredAt, expectedCount);
+        message = changed ? "Added one host strike." : "The strike count changed or is already at 3.";
+      } else if (action === "strike-remove") {
+        changed = Boolean(stateToken && stateToken !== "none")
+          && this.moderation.revokeStrike(userId, stateToken!, actor.userId, occurredAt);
         message = changed ? "Removed one active host strike." : "That strike is already inactive or no longer exists.";
+      } else if (action === "host-blacklist") {
+        changed = this.moderation.addHostBlacklist(userId, actor.userId, occurredAt);
+        message = changed ? "Added the host blacklist." : "That user is already host-blacklisted.";
       } else if (action === "host-unblacklist") {
-        changed = this.moderation.removeHostBlacklist(userId, actor.userId, this.now());
+        changed = this.moderation.removeHostBlacklist(userId, actor.userId, occurredAt);
         message = changed ? "Removed the host blacklist." : "That user is not currently host-blacklisted.";
+      } else if (action === "reporter-blacklist") {
+        changed = this.moderation.addReporterBlacklist(userId, actor.userId, occurredAt);
+        message = changed ? "Added the reporter blacklist." : "That user is already reporter-blacklisted.";
       } else if (action === "reporter-unblacklist") {
-        changed = this.moderation.removeReporterBlacklist(userId, actor.userId, this.now());
+        changed = this.moderation.removeReporterBlacklist(userId, actor.userId, occurredAt);
         message = changed ? "Removed the reporter blacklist." : "That user is not currently reporter-blacklisted.";
+      } else if (action === "cooldown-add") {
+        changed = this.moderation.addHostCooldown(userId, actor.userId, occurredAt);
+        message = changed ? "Added the normal hosting cooldown." : "That user already has an active hosting cooldown.";
       } else {
-        changed = this.moderation.clearHostCooldown(userId, actor.userId, this.now());
+        const expectedCreatedAt = Number(stateToken);
+        changed = Number.isFinite(expectedCreatedAt)
+          && this.moderation.clearHostCooldown(userId, actor.userId, occurredAt, expectedCreatedAt);
         message = changed ? "Cleared the hosting cooldown." : "That user does not have a stored hosting cooldown.";
+      }
+      const payload = this.buildHostStatus(userId, message);
+      if (changed) {
+        const status = this.moderation.getHostModerationStatus(userId);
+        const cooldown = this.hostCooldowns.get(userId);
+        const cooldownActive = Boolean(cooldown && cooldown.nextEligibleAt > occurredAt);
+        await this.safeLog({
+          kind: "host-status", title: "Host Status Updated", action: message,
+          targetUserId: userId, moderatorId: actor.userId,
+          result: `${status.strikeCount} / 3 strikes | Host blacklist: ${status.hostBlacklisted ? "Yes" : "No"} | Reporter blacklist: ${status.reporterBlacklisted ? "Yes" : "No"} | Cooldown: ${cooldownActive ? "Active" : "Not active"}`,
+          occurredAt
+        });
       }
       return {
         ok: changed,
         message,
-        hostStatusPayload: this.buildHostStatus(userId, message)
+        hostStatusPayload: payload
       };
     });
   }
@@ -317,11 +347,12 @@ export class ModerationService {
     this.moderation.setUrgentMessage(sessionId, message.id, this.now());
   }
 
-  private async safeLog(event: SessionLogEvent): Promise<void> {
+  private async safeLog(event: LogEvent): Promise<void> {
     try {
       await this.sessionLogger.log(event);
     } catch (error) {
-      console.error("Failed to write moderation session log", event.title, event.listing.id, error);
+      console.error("Failed to write moderation session log", event.title,
+        event.kind === "host-status" ? event.targetUserId : event.listing.id, error);
     }
   }
 }

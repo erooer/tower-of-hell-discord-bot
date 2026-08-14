@@ -7,7 +7,7 @@ import {
   type MessageEditOptions
 } from "discord.js";
 import type { Listing } from "./model.js";
-import { typeLabel } from "./model.js";
+import { SERVER_TYPE_PRESENTATION, typeLabel } from "./model.js";
 import { REPORT_THRESHOLD } from "../moderation/model.js";
 
 function discordTimestamp(ms: number, style: "t" | "R"): string {
@@ -15,7 +15,7 @@ function discordTimestamp(ms: number, style: "t" | "R"): string {
 }
 
 export function liveMessage(listing: Listing, roleId: string, reportCount = 0): MessageCreateOptions & MessageEditOptions {
-  const title = listing.type === "carmine" ? "🔥 Carmine Hunting" : "⚡ XP Grinding Server";
+  const presentation = SERVER_TYPE_PRESENTATION[listing.type];
   const joinRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setLabel("Join Server")
@@ -31,10 +31,12 @@ export function liveMessage(listing: Listing, roleId: string, reportCount = 0): 
     allowedMentions: { roles: [roleId], users: [], repliedUser: false },
     embeds: [
       new EmbedBuilder()
-        .setColor(listing.type === "carmine" ? 0xb51f42 : 0x35a7ff)
-        .setTitle(title)
+        .setColor(presentation.color)
+        .setTitle(presentation.announcementTitle)
+        .setDescription(presentation.announcementDescription ?? null)
         .addFields(
           { name: "Host", value: `<@${listing.ownerId}>`, inline: true },
+          ...(listing.type === "event" ? [{ name: "Activity", value: "Event", inline: true }] : []),
           { name: "Started", value: discordTimestamp(listing.createdAt, "t"), inline: true },
           { name: "Expires", value: discordTimestamp(listing.expiresAt, "R"), inline: true },
           { name: "Reports", value: `⚠️ ${reportCount}/${REPORT_THRESHOLD}`, inline: true }

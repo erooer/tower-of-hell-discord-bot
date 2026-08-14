@@ -14,7 +14,7 @@ export function openDatabase(path: string): Database.Database {
       id TEXT PRIMARY KEY,
       guild_id TEXT NOT NULL,
       owner_id TEXT NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('carmine', 'xp')),
+      type TEXT NOT NULL CHECK(type IN ('carmine', 'xp', 'event')),
       url TEXT NOT NULL,
       live_channel_id TEXT NOT NULL,
       live_message_id TEXT,
@@ -90,7 +90,7 @@ export function openDatabase(path: string): Database.Database {
     CREATE TABLE IF NOT EXISTS host_blacklist (
       user_id TEXT PRIMARY KEY,
       blacklisted_at INTEGER NOT NULL,
-      triggering_session_id TEXT NOT NULL REFERENCES live_server_listings(id),
+      triggering_session_id TEXT,
       moderator_id TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'strikes',
       removed_at INTEGER,
@@ -99,17 +99,26 @@ export function openDatabase(path: string): Database.Database {
 
     CREATE TABLE IF NOT EXISTS host_cooldowns (
       user_id TEXT PRIMARY KEY,
-      listing_id TEXT NOT NULL REFERENCES live_server_listings(id),
+      listing_id TEXT,
       successful_creation_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS host_status_strikes (
+      id TEXT PRIMARY KEY,
+      host_id TEXT NOT NULL,
+      moderator_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+      revoked_at INTEGER,
+      revoked_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS active_host_status_strikes
+      ON host_status_strikes(host_id, active);
 
     CREATE TABLE IF NOT EXISTS moderation_status_audit (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
-      action TEXT NOT NULL CHECK(action IN (
-        'strike_revoked', 'host_blacklist_removed',
-        'reporter_blacklist_removed', 'cooldown_cleared'
-      )),
+      action TEXT NOT NULL,
       moderator_id TEXT NOT NULL,
       related_id TEXT,
       created_at INTEGER NOT NULL
@@ -118,9 +127,40 @@ export function openDatabase(path: string): Database.Database {
       ON moderation_status_audit(user_id, created_at);
   `);
   migrateReportReasons(db);
+  migrateListingTypes(db);
   migrateModerationCasePanels(db);
   migrateModerationStatus(db);
   return db;
+}
+
+function migrateListingTypes(db: Database.Database): void {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='live_server_listings'")
+    .get() as { sql: string } | undefined;
+  if (!row?.sql || row.sql.includes("'event'")) return;
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.exec(`
+      CREATE TABLE live_server_listings_event_migration (
+        id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('carmine', 'xp', 'event')), url TEXT NOT NULL,
+        live_channel_id TEXT NOT NULL, live_message_id TEXT, control_channel_id TEXT NOT NULL,
+        control_message_id TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_pending IN (0, 1)),
+        ended_at INTEGER, ended_reason TEXT, updated_at INTEGER NOT NULL
+      );
+      INSERT INTO live_server_listings_event_migration SELECT * FROM live_server_listings;
+      DROP TABLE live_server_listings;
+      ALTER TABLE live_server_listings_event_migration RENAME TO live_server_listings;
+      CREATE UNIQUE INDEX one_active_listing_per_owner_type
+        ON live_server_listings(guild_id, owner_id, type) WHERE active = 1;
+      CREATE INDEX active_expirations ON live_server_listings(active, expires_at);
+      CREATE INDEX pending_cleanup ON live_server_listings(cleanup_pending);
+    `);
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
 }
 
 function addColumnIfMissing(
@@ -152,6 +192,55 @@ function migrateModerationStatus(db: Database.Database): void {
   );
   addColumnIfMissing(db, "reporter_blacklist", reporterBlacklistColumns, "removed_at", "INTEGER");
   addColumnIfMissing(db, "reporter_blacklist", reporterBlacklistColumns, "removed_by", "TEXT");
+
+  makeModerationForeignKeysOptional(db);
+  removeLegacyAuditActionConstraint(db);
+}
+
+function makeModerationForeignKeysOptional(db: Database.Database): void {
+  const hostBlacklistColumns = db.prepare("PRAGMA table_info(host_blacklist)").all() as Array<{ name: string; notnull: number }>;
+  if (hostBlacklistColumns.find((column) => column.name === "triggering_session_id")?.notnull === 1) {
+    db.exec(`
+      CREATE TABLE host_blacklist_migrated (
+        user_id TEXT PRIMARY KEY, blacklisted_at INTEGER NOT NULL,
+        triggering_session_id TEXT, moderator_id TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'strikes', removed_at INTEGER, removed_by TEXT
+      );
+      INSERT INTO host_blacklist_migrated SELECT user_id,blacklisted_at,triggering_session_id,
+        moderator_id,source,removed_at,removed_by FROM host_blacklist;
+      DROP TABLE host_blacklist;
+      ALTER TABLE host_blacklist_migrated RENAME TO host_blacklist;
+    `);
+  }
+
+  const cooldownColumns = db.prepare("PRAGMA table_info(host_cooldowns)").all() as Array<{ name: string; notnull: number }>;
+  if (cooldownColumns.find((column) => column.name === "listing_id")?.notnull === 1) {
+    db.exec(`
+      CREATE TABLE host_cooldowns_migrated (
+        user_id TEXT PRIMARY KEY, listing_id TEXT,
+        successful_creation_at INTEGER NOT NULL
+      );
+      INSERT INTO host_cooldowns_migrated SELECT user_id,listing_id,successful_creation_at FROM host_cooldowns;
+      DROP TABLE host_cooldowns;
+      ALTER TABLE host_cooldowns_migrated RENAME TO host_cooldowns;
+    `);
+  }
+}
+
+function removeLegacyAuditActionConstraint(db: Database.Database): void {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='moderation_status_audit'")
+    .get() as { sql: string } | undefined;
+  if (!row?.sql.includes("CHECK(action IN")) return;
+  db.exec(`
+    CREATE TABLE moderation_status_audit_migrated (
+      id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL,
+      moderator_id TEXT NOT NULL, related_id TEXT, created_at INTEGER NOT NULL
+    );
+    INSERT INTO moderation_status_audit_migrated SELECT * FROM moderation_status_audit;
+    DROP TABLE moderation_status_audit;
+    ALTER TABLE moderation_status_audit_migrated RENAME TO moderation_status_audit;
+    CREATE INDEX moderation_status_audit_user ON moderation_status_audit(user_id, created_at);
+  `);
 }
 
 function migrateReportReasons(db: Database.Database): void {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
+import BetterSqlite3 from "better-sqlite3";
 import { openDatabase } from "../src/storage/database.js";
 import { ListingRepository } from "../src/storage/listing-repository.js";
 import { EXTENSION_MS } from "../src/live-servers/model.js";
@@ -35,6 +36,55 @@ describe("ListingRepository", () => {
       liveChannelId: "live", liveMessageId: null, controlChannelId: "controls", controlMessageId: null,
       createdAt: base, expiresAt: base + 1
     })).not.toThrow();
+    expect(() => repository.create({
+      guildId: "guild", ownerId: "owner", type: "event", url: "https://www.roblox.com/share?code=EventCode123&type=Server",
+      liveChannelId: "live", liveMessageId: null, controlChannelId: "controls", controlMessageId: null,
+      createdAt: base, expiresAt: base + 1
+    })).not.toThrow();
+  });
+
+  it("migrates the legacy two-type constraint without losing existing listings", () => {
+    database.close();
+    const directory = mkdtempSync(join(tmpdir(), "listing-event-migration-"));
+    const path = join(directory, "legacy.sqlite");
+    try {
+      const legacy = new BetterSqlite3(path);
+      legacy.exec(`CREATE TABLE live_server_listings (
+        id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('carmine','xp')), url TEXT NOT NULL,
+        live_channel_id TEXT NOT NULL, live_message_id TEXT, control_channel_id TEXT NOT NULL,
+        control_message_id TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1, cleanup_pending INTEGER NOT NULL DEFAULT 0,
+        ended_at INTEGER, ended_reason TEXT, updated_at INTEGER NOT NULL
+      );
+      INSERT INTO live_server_listings VALUES
+        ('legacy','guild','legacy-owner','carmine','https://www.roblox.com/share?code=Legacy&type=Server',
+        'live','message','controls','panel',${base},${base + 7_200_000},1,0,NULL,NULL,${base});
+      CREATE TABLE live_server_reports (
+        session_id TEXT NOT NULL REFERENCES live_server_listings(id), reporter_id TEXT NOT NULL,
+        host_id TEXT NOT NULL, reported_at INTEGER NOT NULL, report_reason TEXT,
+        additional_details TEXT, outcome TEXT NOT NULL DEFAULT 'pending', decided_at INTEGER,
+        PRIMARY KEY(session_id, reporter_id)
+      );
+      INSERT INTO live_server_reports VALUES ('legacy','reporter','legacy-owner',${base},NULL,NULL,'pending',NULL);`);
+      legacy.close();
+
+      database = openDatabase(path);
+      repository = new ListingRepository(database);
+      expect(repository.get("legacy")).toMatchObject({ ownerId: "legacy-owner", type: "carmine", active: true });
+      expect((database.prepare("SELECT COUNT(*) AS count FROM live_server_reports WHERE session_id='legacy'").get() as { count: number }).count).toBe(1);
+      expect(() => repository.create({
+        guildId: "guild", ownerId: "event-owner", type: "event",
+        url: "https://www.roblox.com/share?code=Event&type=Server", liveChannelId: "live",
+        liveMessageId: "event-message", controlChannelId: "controls", controlMessageId: "event-panel",
+        createdAt: base, expiresAt: base + 7_200_000
+      })).not.toThrow();
+    } finally {
+      if (database.open) database.close();
+      rmSync(directory, { recursive: true, force: true });
+      database = openDatabase(":memory:");
+      repository = new ListingRepository(database);
+    }
   });
 
   it("blocks early extensions", () => {

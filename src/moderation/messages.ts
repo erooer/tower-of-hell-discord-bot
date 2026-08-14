@@ -10,6 +10,7 @@ import {
   type MessageEditOptions
 } from "discord.js";
 import { REPORT_THRESHOLD, reportReasonLabel, type CaseSnapshot, type ReporterSummary } from "./model.js";
+import { SERVER_TYPE_PRESENTATION } from "../live-servers/model.js";
 
 function timestamp(ms: number, style: "f" | "R"): string {
   return `<t:${Math.floor(ms / 1_000)}:${style}>`;
@@ -29,7 +30,7 @@ function staffControls(snapshot: CaseSnapshot): ActionRowBuilder<ButtonBuilder> 
 function staffCaseEmbed(snapshot: CaseSnapshot, title: string, openColor: number): EmbedBuilder {
   const { listing, case: moderationCase } = snapshot;
   const resolved = moderationCase.status !== "open";
-  const activity = listing.type === "carmine" ? "🔥 Carmine Hunting" : "⚡ XP Grinding Server";
+  const activity = SERVER_TYPE_PRESENTATION[listing.type].activity;
   const status = resolved
     ? moderationCase.status === "struck" ? "Resolved — strike issued" : "Resolved — reports ignored"
     : "Open";

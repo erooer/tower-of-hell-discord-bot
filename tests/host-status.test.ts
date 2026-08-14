@@ -15,6 +15,8 @@ import { openDatabase } from "../src/storage/database.js";
 import { HostCooldownRepository } from "../src/storage/host-cooldown-repository.js";
 import { ListingRepository } from "../src/storage/listing-repository.js";
 import { ModerationRepository } from "../src/storage/moderation-repository.js";
+import type { SessionLogger } from "../src/logging/session-logger.js";
+import { sessionLogMessage } from "../src/logging/session-logger.js";
 
 const targetId = "1234567890123456789";
 const moderatorId = "2234567890123456789";
@@ -97,6 +99,25 @@ describe("/hoststatus registration and routing", () => {
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
     expect(interaction.editReply).toHaveBeenCalledWith(payload);
   });
+
+  it("edits the same ephemeral response with regenerated controls after a button action", async () => {
+    const payload: any = { content: "Added one host strike.", embeds: [{ title: "refreshed" }], components: [{ refreshed: true }] };
+    const updateHostStatus = vi.fn(async () => ({ ok: true, message: "Updated", hostStatusPayload: payload }));
+    const handler = installRouter({ updateHostStatus });
+    const interaction = {
+      customId: `hoststatus:strike-add:${targetId}:0`, guildId: "guild", channelId: "commands",
+      user: { id: moderatorId }, member: { roles: ["moderator-role"] },
+      isChatInputCommand: () => false, isButton: () => true, isStringSelectMenu: () => false,
+      isModalSubmit: () => false, isRepliable: () => true,
+      deferUpdate: vi.fn(async () => undefined), editReply: vi.fn(async () => undefined),
+      reply: vi.fn(), followUp: vi.fn(), deferred: false, replied: false
+    };
+    await handler(interaction);
+    expect(interaction.deferUpdate).toHaveBeenCalledOnce();
+    expect(updateHostStatus).toHaveBeenCalledWith(targetId, "strike-add", "0", expect.objectContaining({ userId: moderatorId }));
+    expect(interaction.editReply).toHaveBeenCalledWith(payload);
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
 });
 
 describe("host moderation status and reversals", () => {
@@ -151,6 +172,7 @@ describe("host moderation status and reversals", () => {
     expect(json).toContain('"name":"Reporter Blacklisted","value":"Yes"');
     expect(json).toContain("Active — ends");
     expect(json).toContain("total");
+    expect(json).toContain("Add Strike");
     expect(json).toContain("Remove Strike");
     expect(json).toContain("Remove Reporter Blacklist");
     expect(json).toContain("Clear Cooldown");
@@ -165,20 +187,20 @@ describe("host moderation status and reversals", () => {
     expect(statusJson).toContain('"name":"Host Strikes","value":"3 / 3"');
     expect(statusJson).toContain('"name":"Host Blacklisted","value":"Yes"');
 
-    const first = await service.updateHostStatus(targetId, "strike", before.latestActiveStrikeId, actor);
+    const first = await service.updateHostStatus(targetId, "strike-remove", before.latestActiveStrikeId, actor);
     expect(first.ok).toBe(true);
     expect(moderation.getHostModerationStatus(targetId)).toMatchObject({ strikeCount: 2, hostBlacklisted: false });
     expect(moderation.listStatusAudit(targetId).map((entry) => entry.action)).toEqual(expect.arrayContaining([
       "strike_revoked", "host_blacklist_removed"
     ]));
 
-    const stale = await service.updateHostStatus(targetId, "strike", before.latestActiveStrikeId, actor);
+    const stale = await service.updateHostStatus(targetId, "strike-remove", before.latestActiveStrikeId, actor);
     expect(stale.ok).toBe(false);
     expect(moderation.getHostStrikeCount(targetId)).toBe(2);
   });
 
   it("safely rejects strike removal when no active strike exists", async () => {
-    const result = await service.updateHostStatus(targetId, "strike", null, actor);
+    const result = await service.updateHostStatus(targetId, "strike-remove", null, actor);
     expect(result.ok).toBe(false);
     expect(moderation.getHostStrikeCount(targetId)).toBe(0);
     expect(moderation.listStatusAudit(targetId)).toEqual([]);
@@ -210,22 +232,145 @@ describe("host moderation status and reversals", () => {
     );
     addStrike();
     const strikeId = moderation.getHostModerationStatus(targetId).latestActiveStrikeId;
-    expect((await denied.updateHostStatus(targetId, "strike", strikeId, actor)).ok).toBe(false);
+    expect((await denied.updateHostStatus(targetId, "strike-remove", strikeId, actor)).ok).toBe(false);
     expect(moderation.getHostStrikeCount(targetId)).toBe(1);
   });
 
   it("clears only the stored cooldown and audits stale-safe behavior", async () => {
     const listing = addStrike();
     cooldowns.recordSuccessfulCreation(targetId, listing.id, now);
-    expect((await service.updateHostStatus(targetId, "cooldown", null, actor)).ok).toBe(true);
+    expect((await service.updateHostStatus(targetId, "cooldown-clear", String(now), actor)).ok).toBe(true);
     expect(cooldowns.get(targetId)).toBeNull();
     expect(moderation.listStatusAudit(targetId)).toContainEqual(expect.objectContaining({ action: "cooldown_cleared" }));
-    expect((await service.updateHostStatus(targetId, "cooldown", null, actor)).ok).toBe(false);
+    expect((await service.updateHostStatus(targetId, "cooldown-clear", String(now), actor)).ok).toBe(false);
     expect(moderation.getHostStrikeCount(targetId)).toBe(1);
+  });
+
+  it("always renders a complete usable control panel for a clean account", async () => {
+    const payload = (await service.hostStatus(targetId, actor)).hostStatusPayload!;
+    const json = JSON.stringify(payload);
+    expect(json).toContain('"name":"Host Strikes","value":"0 / 3"');
+    expect(json).toContain("Add Strike");
+    expect(json).toContain("Remove Strike");
+    expect(json).toContain("Add Host Blacklist");
+    expect(json).toContain("Add Reporter Blacklist");
+    expect(json).toContain("Add Cooldown");
+    const buttons = (payload.components![0] as any).components.map((button: any) => button.toJSON());
+    expect(buttons).toHaveLength(5);
+    expect(buttons.find((button: any) => button.label === "Add Strike").disabled).toBe(false);
+    expect(buttons.find((button: any) => button.label === "Remove Strike").disabled).toBe(true);
+  });
+
+  it("adds and removes strikes across 0-3 while keeping both controls visible and bounded", async () => {
+    for (let expected = 0; expected < 3; expected += 1) {
+      const result = await service.updateHostStatus(targetId, "strike-add", String(expected), actor);
+      expect(result.ok).toBe(true);
+      expect(moderation.getHostStrikeCount(targetId)).toBe(expected + 1);
+      const json = JSON.stringify(result.hostStatusPayload);
+      expect(json).toContain("Add Strike");
+      expect(json).toContain("Remove Strike");
+      const stateButtons = (result.hostStatusPayload!.components![0] as any).components.map((button: any) => button.toJSON());
+      expect(stateButtons.find((button: any) => button.label === "Add Strike").disabled).toBe(expected + 1 >= 3);
+      expect(stateButtons.find((button: any) => button.label === "Remove Strike").disabled).toBe(false);
+    }
+    const atCap = (await service.hostStatus(targetId, actor)).hostStatusPayload!;
+    const buttons = (atCap.components![0] as any).components.map((button: any) => button.toJSON());
+    expect(buttons.find((button: any) => button.label === "Add Strike").disabled).toBe(true);
+    expect(buttons.find((button: any) => button.label === "Remove Strike").disabled).toBe(false);
+    expect((await service.updateHostStatus(targetId, "strike-add", "3", actor)).ok).toBe(false);
+    expect(moderation.getHostStrikeCount(targetId)).toBe(3);
+
+    for (let expected = 3; expected > 0; expected -= 1) {
+      const strikeId = moderation.getHostModerationStatus(targetId).latestActiveStrikeId;
+      expect((await service.updateHostStatus(targetId, "strike-remove", strikeId, actor)).ok).toBe(true);
+      expect(moderation.getHostStrikeCount(targetId)).toBe(expected - 1);
+    }
+    expect((await service.updateHostStatus(targetId, "strike-remove", "none", actor)).ok).toBe(false);
+    expect(moderation.getHostStrikeCount(targetId)).toBe(0);
+  });
+
+  it("toggles both blacklists and cooldown and refreshes each opposite control", async () => {
+    let result = await service.updateHostStatus(targetId, "host-blacklist", null, actor);
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result.hostStatusPayload)).toContain("Remove Host Blacklist");
+    result = await service.updateHostStatus(targetId, "host-unblacklist", null, actor);
+    expect(JSON.stringify(result.hostStatusPayload)).toContain("Add Host Blacklist");
+    expect(JSON.stringify(result.hostStatusPayload)).toContain('"name":"Host Blacklisted At","value":"None"');
+
+    result = await service.updateHostStatus(targetId, "reporter-blacklist", null, actor);
+    expect(JSON.stringify(result.hostStatusPayload)).toContain("Remove Reporter Blacklist");
+    result = await service.updateHostStatus(targetId, "reporter-unblacklist", null, actor);
+    expect(JSON.stringify(result.hostStatusPayload)).toContain("Add Reporter Blacklist");
+    expect(JSON.stringify(result.hostStatusPayload)).toContain('"name":"Reporter Blacklisted At","value":"None"');
+
+    result = await service.updateHostStatus(targetId, "cooldown-add", "none", actor);
+    expect(result.ok).toBe(true);
+    expect(cooldowns.get(targetId)?.nextEligibleAt).toBe(now + 3 * 60 * 60 * 1_000);
+    expect(JSON.stringify(result.hostStatusPayload)).toContain("Clear Cooldown");
+    result = await service.updateHostStatus(targetId, "cooldown-clear", String(now), actor);
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result.hostStatusPayload)).toContain("Add Cooldown");
+  });
+
+  it("rejects stale add clicks and writes private moderation logs for every successful action", async () => {
+    const events: any[] = [];
+    const loggedService = new ModerationService(
+      moderatorClient(), listings, moderation,
+      { moderationEnd: vi.fn() } as unknown as LiveServerService,
+      config, () => now, cooldowns, { log: vi.fn(async (event) => { events.push(event); }) } as SessionLogger
+    );
+    expect((await loggedService.updateHostStatus(targetId, "strike-add", "0", actor)).ok).toBe(true);
+    expect((await loggedService.updateHostStatus(targetId, "strike-add", "0", actor)).ok).toBe(false);
+    expect(moderation.getHostStrikeCount(targetId)).toBe(1);
+    expect((await loggedService.updateHostStatus(targetId, "host-blacklist", null, actor)).ok).toBe(true);
+    expect((await loggedService.updateHostStatus(targetId, "reporter-blacklist", null, actor)).ok).toBe(true);
+    expect((await loggedService.updateHostStatus(targetId, "cooldown-add", "none", actor)).ok).toBe(true);
+    const strikeId = moderation.getHostModerationStatus(targetId).latestActiveStrikeId;
+    expect((await loggedService.updateHostStatus(targetId, "strike-remove", strikeId, actor)).ok).toBe(true);
+    expect((await loggedService.updateHostStatus(targetId, "host-unblacklist", null, actor)).ok).toBe(true);
+    expect((await loggedService.updateHostStatus(targetId, "reporter-unblacklist", null, actor)).ok).toBe(true);
+    expect((await loggedService.updateHostStatus(targetId, "cooldown-clear", String(now), actor)).ok).toBe(true);
+    expect(events).toHaveLength(8);
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
+      kind: "host-status", targetUserId: targetId, moderatorId, occurredAt: now
+    })]));
+    expect(events.every((event) => event.result.includes("strikes"))).toBe(true);
+    const logJson = JSON.stringify(sessionLogMessage(events[0]));
+    expect(logJson).toContain(`\"name\":\"Target\",\"value\":\"<@${targetId}>\"`);
+    expect(logJson).toContain('"name":"Developer ID","value":"`' + targetId + '`"');
+    expect(logJson).toContain(`\"name\":\"Moderator\",\"value\":\"<@${moderatorId}>\"`);
   });
 });
 
 describe("host-status persistence", () => {
+  it("preserves moderator-added strikes, blacklists, cooldowns, and audit history after reload", () => {
+    const directory = mkdtempSync(join(tmpdir(), "host-status-added-"));
+    const path = join(directory, "bot.sqlite");
+    try {
+      let database = openDatabase(path);
+      let moderation = new ModerationRepository(database);
+      expect(moderation.addHostStrike(targetId, moderatorId, now, 0)).toBe(true);
+      expect(moderation.addHostBlacklist(targetId, moderatorId, now + 1)).toBe(true);
+      expect(moderation.addReporterBlacklist(targetId, moderatorId, now + 2)).toBe(true);
+      expect(moderation.addHostCooldown(targetId, moderatorId, now + 3)).toBe(true);
+      database.close();
+
+      database = openDatabase(path);
+      moderation = new ModerationRepository(database);
+      const cooldowns = new HostCooldownRepository(database);
+      expect(moderation.getHostModerationStatus(targetId)).toMatchObject({
+        strikeCount: 1, hostBlacklisted: true, reporterBlacklisted: true
+      });
+      expect(cooldowns.get(targetId)?.successfulCreationAt).toBe(now + 3);
+      expect(moderation.listStatusAudit(targetId).map((entry) => entry.action)).toEqual([
+        "strike_added", "host_blacklist_added", "reporter_blacklist_added", "cooldown_added"
+      ]);
+      database.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("preserves revocations, blacklist removals, and audit history after reload", () => {
     const directory = mkdtempSync(join(tmpdir(), "host-status-"));
     const path = join(directory, "bot.sqlite");

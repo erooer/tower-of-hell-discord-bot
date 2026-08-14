@@ -20,6 +20,7 @@ import {
 import type { ModerationService } from "../moderation/service.js";
 import type { StaffActor } from "../moderation/model.js";
 import { hostGrindSelector, HOST_GRIND_SELECT_ID } from "./host-grind.js";
+import { isServerType, SERVER_TYPE_PRESENTATION } from "../live-servers/model.js";
 
 
 export function registerInteractionRouter(
@@ -185,8 +186,10 @@ async function handleHostStatusButton(
   moderation: ModerationService,
   config: Config
 ): Promise<void> {
-  const [, action, userId, strikeId] = interaction.customId.split(":");
-  if (!action || !userId || !["strike", "host-unblacklist", "reporter-unblacklist", "cooldown"].includes(action)) return;
+  const [, action, userId, stateToken] = interaction.customId.split(":");
+  const actions = ["strike-add", "strike-remove", "host-blacklist", "host-unblacklist",
+    "reporter-blacklist", "reporter-unblacklist", "cooldown-add", "cooldown-clear"];
+  if (!action || !userId || !actions.includes(action)) return;
   if (interaction.guildId !== config.guildId || !memberHasRole(interaction, config.moderatorRoleId)) {
     await interaction.reply({
       content: "You are not authorized to manage host moderation status.",
@@ -197,8 +200,8 @@ async function handleHostStatusButton(
   await interaction.deferUpdate();
   const result = await moderation.updateHostStatus(
     userId,
-    action as "strike" | "host-unblacklist" | "reporter-unblacklist" | "cooldown",
-    strikeId ?? null,
+    action as import("../moderation/host-status.js").HostStatusAction,
+    stateToken ?? null,
     staffActor(interaction)
   );
   await interaction.editReply(result.hostStatusPayload ?? { content: result.message, embeds: [], components: [] });
@@ -214,7 +217,7 @@ async function handleHostGrindSelect(
     return;
   }
   const type = interaction.values[0];
-  if (type !== "carmine" && type !== "xp") {
+  if (!type || !isServerType(type)) {
     await interaction.reply({ content: "Choose a valid grind type.", flags: MessageFlags.Ephemeral });
     return;
   }
@@ -230,7 +233,7 @@ async function handleHostGrindSelect(
   }
   await interaction.showModal(createPrivateServerUrlModal(
     `lsv1:create:${type}`,
-    type === "carmine" ? "Start a Carmine Hunt" : "Start XP Grinding"
+    SERVER_TYPE_PRESENTATION[type].modalTitle
   ));
 }
 
@@ -297,7 +300,7 @@ async function handleModal(
     return;
   }
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  if (action === "create" && (value === "carmine" || value === "xp")) {
+  if (action === "create" && isServerType(value)) {
     const result = await service.create(interaction.guildId, interaction.user.id, value, url);
     await interaction.editReply(result.message ?? "Done.");
     return;

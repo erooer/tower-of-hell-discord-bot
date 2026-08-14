@@ -14,7 +14,7 @@ export const REPORT_REASON_INPUT_ID = "report-reason";
 export const REPORT_DETAILS_INPUT_ID = "report-details";
 
 /**
- * Builds the URL modal shared by Carmine creation, XP creation, and Change Link.
+ * Builds the URL modal shared by all live-session types and Change Link.
  * Current Discord modal payloads require text inputs to be contained by a label
  * component with visible label text.
  */

@@ -38,13 +38,14 @@ describe("/hostgrind interactions", () => {
     expect(liveServerCommands.map((command) => command.name)).not.toContain("xp");
   });
 
-  it("offers Carmine Hunting and XP Grinding", () => {
+  it("offers Carmine Hunting, XP Grinding, and Event", () => {
     const payload = JSON.parse(JSON.stringify(hostGrindSelector()));
     expect(payload.components[0].components[0]).toMatchObject({
       custom_id: "lshost:type",
       options: [
         { label: "Carmine Hunting", value: "carmine" },
-        { label: "XP Grinding", value: "xp" }
+        { label: "XP Grinding", value: "xp" },
+        { label: "Event", value: "event" }
       ]
     });
   });
@@ -67,7 +68,8 @@ describe("/hostgrind interactions", () => {
 
   it.each([
     ["carmine", "lsv1:create:carmine", "Start a Carmine Hunt"],
-    ["xp", "lsv1:create:xp", "Start XP Grinding"]
+    ["xp", "lsv1:create:xp", "Start XP Grinding"],
+    ["event", "lsv1:create:event", "Start an Event"]
   ])("selecting %s opens its existing creation modal without creating yet", async (type, customId, title) => {
     const checkCreationEligibility = vi.fn(() => ({ ok: true as const }));
     const create = vi.fn();

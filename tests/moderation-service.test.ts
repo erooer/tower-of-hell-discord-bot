@@ -13,7 +13,7 @@ import { ModerationRepository } from "../src/storage/moderation-repository.js";
 
 const config: Config = {
   token: "token", clientId: "client", guildId: "guild", liveChannelId: "live",
-  commandsChannelId: "commands", carmineRoleId: "carmine-role", xpRoleId: "xp-role",
+  commandsChannelId: "commands", carmineRoleId: "carmine-role", xpRoleId: "xp-role", eventRoleId: "event-role",
   staffReportsChannelId: "staff", sessionLogsChannelId: "logs", moderatorRoleId: "moderator-role",
   databasePath: ":memory:", expirationPollMs: 15_000
 };

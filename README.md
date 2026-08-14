@@ -1,6 +1,6 @@
 # Tower of Hell Live Server Bot
 
-Live Server V1 automates Carmine Hunt and XP Grinding private-server listings. Owners use `/hostgrind` in the private command channel, choose a grind type, and submit their private-server link. The bot publishes a minimal, role-pinging listing in the live channel and posts an owner-only control panel back in the command channel.
+Live Server V1 automates Carmine Hunt, XP Grinding, and Event private-server listings. Owners use `/hostgrind` in the private command channel, choose a session type, and submit their private-server link. The bot publishes a minimal, role-pinging listing in the live channel and posts an owner-only control panel back in the command channel.
 
 The SQLite database is the source of truth. Every listing stores its Discord message IDs and absolute expiration time. On startup the bot reconciles active records, removes anything that expired while offline, detects missing live messages, and resumes a periodic expiration sweep. Failed Discord cleanup is retained and retried rather than silently abandoned.
 
@@ -9,7 +9,7 @@ The SQLite database is the source of truth. Every listing stores its Discord mes
 - Node.js 20 or newer
 - A Discord application with a bot user
 - Four text channels: `#live-servers`, `#server-bot-cmds`, a staff-only reports channel, and a private session-logs channel
-- Three roles: Carmine Hunt ping, XP Grinding ping, and a moderator/staff role
+- Four roles: Carmine Hunt ping, XP Grinding ping, Event ping, and a moderator/staff role
 
 No privileged gateway intents are required. In the Developer Portal, the bot only uses the standard `Guilds` and `Guild Messages` intents; Message Content, Server Members, and Presence can remain off.
 
@@ -27,6 +27,7 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
    - `SERVER_COMMANDS_CHANNEL_ID`: ID of `#server-bot-cmds`
    - `CARMINE_ROLE_ID`: role pinged for Carmine Hunting
    - `XP_ROLE_ID`: role pinged for XP Grinding
+   - `EVENT_ROLE_ID`: role pinged only for Event sessions
    - `STAFF_REPORTS_CHANNEL_ID`: staff-only channel receiving escalated report cases
    - `SESSION_LOGS_CHANNEL_ID`: private moderator channel receiving notable session-action logs
    - `MODERATOR_ROLE_ID`: role pinged on escalation and required for all moderation controls
@@ -87,7 +88,7 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 - The first unique report creates one quiet persistent **Reported Session** panel in the staff channel. At seven reports, the same case gains one separate **Urgent Report** message and pings `MODERATOR_ROLE_ID` exactly once; later reports refresh both existing messages without another ping.
 - Staff cases show aggregated reason totals. Staff can inspect each reporter's reason, details, and history; blacklist troll reporters; ignore reports; or strike/remove the server. Ignored reports become rejected history; struck reports become valid history.
 - One struck session can create only one host strike. At three active strikes, the host is persistently blocked from creating new listings.
-- `/hoststatus user_id:<developer ID>` lets exact-role moderators inspect strikes, both blacklist types, report history, and hosting cooldowns without requiring the target to remain in the guild. Strike revocations, blacklist removals, and cooldown clearing are conditional, audited, and restart-safe.
+- `/hoststatus user_id:<developer ID>` lets exact-role moderators inspect and manage strikes, both blacklist types, report history, and hosting cooldowns without requiring the target to remain in the guild. Its persistent ephemeral panel supports bounded strike changes, blacklist toggles, and the normal three-hour cooldown; every successful change is audited, logged privately, and restart-safe.
 - Successful creation, extension, link change, host/moderator ending, natural expiration, manual public-message deletion, Strike / Remove, Reports Ignored, and strike-threshold host blacklisting write compact embeds only to `SESSION_LOGS_CHANNEL_ID`. End logs distinguish the original host, actual ending actor, and reason. Log failures never roll back the underlying action, and reconciliation does not fabricate event logs.
 - Reports, outcomes, cases, blacklists, and strike history share the SQLite database and are reconciled without duplicate case messages after restart.
 
@@ -107,7 +108,8 @@ The unit tests cover URL safety, duplicate constraints, exact extension arithmet
 Use a test server or temporary roles/channels before production.
 
 1. **Carmine:** Run `/hostgrind` in `#server-bot-cmds`, choose Carmine Hunting, submit a valid Roblox private-server URL, and verify one Carmine role ping, the minimal live embed, a two-hour relative expiration, and a control panel.
-2. **XP:** Repeat with `/hostgrind` and choose XP Grinding; verify the XP role and wording. Confirm the three-hour per-user cooldown applies across both grind types.
+2. **XP:** Repeat with `/hostgrind` and choose XP Grinding; verify the XP role and wording. Confirm the three-hour per-user cooldown applies across all session types.
+3. **Event:** Choose Event, submit a verified Tower of Hell private-server URL, and verify only the Event role is pinged. Confirm the Event title/description, Join Server button, controls, logging, expiration, and restart reconciliation use the same listing lifecycle.
 3. **Channel restriction:** Try `/hostgrind` in another channel; verify an ephemeral rejection and no listing.
 4. **Invalid/wrong-game URL:** Submit a non-Roblox, HTTP, Roblox URL without a private-server code, or a valid private-server URL for another Place ID; verify private rejection and no listing or role ping. Test both direct game URLs and modern `/share` links.
 5. **Duplicate:** Run the same command again while its listing is active; verify no second live message or ping.

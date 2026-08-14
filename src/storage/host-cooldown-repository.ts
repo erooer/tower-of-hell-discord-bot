@@ -4,14 +4,14 @@ export const HOST_COOLDOWN_MS = 3 * 60 * 60 * 1_000;
 
 export type HostCooldown = {
   userId: string;
-  listingId: string;
+  listingId: string | null;
   successfulCreationAt: number;
   nextEligibleAt: number;
 };
 
 type HostCooldownRow = {
   user_id: string;
-  listing_id: string;
+  listing_id: string | null;
   successful_creation_at: number;
 };
 

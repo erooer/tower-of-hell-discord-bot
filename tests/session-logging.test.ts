@@ -14,7 +14,7 @@ import { ModerationRepository } from "../src/storage/moderation-repository.js";
 
 const config: Config = {
   token: "token", clientId: "client", guildId: "guild", liveChannelId: "live", commandsChannelId: "commands",
-  carmineRoleId: "carmine-role", xpRoleId: "xp-role", staffReportsChannelId: "staff",
+  carmineRoleId: "carmine-role", xpRoleId: "xp-role", eventRoleId: "event-role", staffReportsChannelId: "staff",
   sessionLogsChannelId: "logs", moderatorRoleId: "moderator-role", databasePath: ":memory:", expirationPollMs: 15_000
 };
 const oldUrl = "https://www.roblox.com/share?code=OldCode123&type=Server";
@@ -236,5 +236,21 @@ describe("session log payload", () => {
     expect(json).toContain("<t:1800000100:F>");
     expect(json).toContain("listing-id");
     expect(json).not.toContain(oldUrl);
+  });
+
+  it("identifies Event sessions as Event in session logs", () => {
+    const eventListing: Listing = {
+      id: "event-listing", guildId: "guild", ownerId: "event-host", type: "event", url: oldUrl,
+      liveChannelId: "live", liveMessageId: "live", controlChannelId: "controls", controlMessageId: "control",
+      createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
+      endedAt: null, endedReason: null, updatedAt: 1_800_000_000_000
+    };
+    const json = JSON.stringify(sessionLogMessage({
+      title: "Session Created", action: "Created a live-server session", listing: eventListing,
+      actor: { kind: "host", userId: "event-host" }, occurredAt: 1_800_000_100_000
+    }));
+    expect(json).toContain('"name":"Type","value":"Event"');
+    expect(json).not.toContain("XP Grinding");
+    expect(json).not.toContain("Carmine Hunting");
   });
 });

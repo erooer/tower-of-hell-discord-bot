@@ -92,7 +92,9 @@ export class LiveServerService {
   }
 
   private roleId(type: ServerType): string {
-    return type === "carmine" ? this.config.carmineRoleId : this.config.xpRoleId;
+    if (type === "carmine") return this.config.carmineRoleId;
+    if (type === "xp") return this.config.xpRoleId;
+    return this.config.eventRoleId;
   }
 
   private reportCount(sessionId: string): number {

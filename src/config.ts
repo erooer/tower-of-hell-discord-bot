@@ -16,6 +16,7 @@ const schema = z.object({
   SERVER_COMMANDS_CHANNEL_ID: snowflake,
   CARMINE_ROLE_ID: snowflake,
   XP_ROLE_ID: snowflake,
+  EVENT_ROLE_ID: snowflake,
   STAFF_REPORTS_CHANNEL_ID: snowflake,
   SESSION_LOGS_CHANNEL_ID: snowflake,
   MODERATOR_ROLE_ID: snowflake,
@@ -31,6 +32,7 @@ export type Config = {
   commandsChannelId: string;
   carmineRoleId: string;
   xpRoleId: string;
+  eventRoleId: string;
   staffReportsChannelId: string;
   sessionLogsChannelId: string;
   moderatorRoleId: string;
@@ -53,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     commandsChannelId: value.SERVER_COMMANDS_CHANNEL_ID,
     carmineRoleId: value.CARMINE_ROLE_ID,
     xpRoleId: value.XP_ROLE_ID,
+    eventRoleId: value.EVENT_ROLE_ID,
     staffReportsChannelId: value.STAFF_REPORTS_CHANNEL_ID,
     sessionLogsChannelId: value.SESSION_LOGS_CHANNEL_ID,
     moderatorRoleId: value.MODERATOR_ROLE_ID,
