@@ -9,6 +9,7 @@ import { ModerationRepository } from "./storage/moderation-repository.js";
 import { ModerationService } from "./moderation/service.js";
 import { HostCooldownRepository } from "./storage/host-cooldown-repository.js";
 import { DiscordSessionLogger } from "./logging/session-logger.js";
+import { validateStartupConfiguration } from "./startup-validation.js";
 
 const config = loadConfig();
 const database = openDatabase(config.databasePath);
@@ -47,23 +48,7 @@ registerInteractionRouter(client, service, moderation, config);
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);
   try {
-    const guild = await readyClient.guilds.fetch(config.guildId);
-    const [liveChannel, commandsChannel, staffChannel, sessionLogsChannel, carmineRole, xpRole, moderatorRole] = await Promise.all([
-      readyClient.channels.fetch(config.liveChannelId),
-      readyClient.channels.fetch(config.commandsChannelId),
-      readyClient.channels.fetch(config.staffReportsChannelId),
-      readyClient.channels.fetch(config.sessionLogsChannelId),
-      guild.roles.fetch(config.carmineRoleId),
-      guild.roles.fetch(config.xpRoleId),
-      guild.roles.fetch(config.moderatorRoleId)
-    ]);
-    if (!liveChannel?.isTextBased() || liveChannel.isDMBased()) throw new Error("LIVE_SERVERS_CHANNEL_ID is not a guild text channel.");
-    if (!commandsChannel?.isTextBased() || commandsChannel.isDMBased()) throw new Error("SERVER_COMMANDS_CHANNEL_ID is not a guild text channel.");
-    if (!staffChannel?.isTextBased() || staffChannel.isDMBased()) throw new Error("STAFF_REPORTS_CHANNEL_ID is not a guild text channel.");
-    if (!sessionLogsChannel?.isTextBased() || sessionLogsChannel.isDMBased()) throw new Error("SESSION_LOGS_CHANNEL_ID is not a guild text channel.");
-    if (!carmineRole) throw new Error("CARMINE_ROLE_ID was not found in the configured guild.");
-    if (!xpRole) throw new Error("XP_ROLE_ID was not found in the configured guild.");
-    if (!moderatorRole) throw new Error("MODERATOR_ROLE_ID was not found in the configured guild.");
+    await validateStartupConfiguration(readyClient, config);
     await service.reconcileActive();
     await moderation.reconcileCases();
     scheduler.start();

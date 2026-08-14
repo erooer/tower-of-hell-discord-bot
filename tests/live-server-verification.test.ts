@@ -389,6 +389,9 @@ describe("LiveServerService verification boundary", () => {
     const created = await service.create("guild", "event-host", "event", oldUrl);
     if (!created.ok) throw new Error(created.message);
     expect(created.listing.type).toBe("event");
+    expect(created.listing.liveChannelId).toBe("live");
+    expect(client.channels.fetch).toHaveBeenCalledWith("live");
+    expect(client.channels.fetch).not.toHaveBeenCalledWith("event-role");
     expect(liveSend).toHaveBeenCalledWith(expect.objectContaining({
       content: "<@&event-role>", allowedMentions: { roles: ["event-role"], users: [], repliedUser: false }
     }));
