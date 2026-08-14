@@ -1,0 +1,265 @@
+import {
+  Client,
+  DiscordAPIError,
+  type GuildTextBasedChannel,
+  type Message,
+  type TextBasedChannel
+} from "discord.js";
+import type { Config } from "../config.js";
+import type { ListingRepository } from "../storage/listing-repository.js";
+import { LISTING_LIFETIME_MS, type Listing, type ServerType } from "./model.js";
+import { controlMessage, liveMessage } from "./messages.js";
+import { KeyedMutex } from "./keyed-mutex.js";
+import {
+  RobloxPrivateServerVerifier,
+  type PrivateServerVerifier,
+  type RobloxVerificationResult
+} from "../roblox/private-server-verifier.js";
+
+export type ServiceResult = { ok: true; listing: Listing; message?: string } | { ok: false; message: string };
+
+function isUnknownMessage(error: unknown): boolean {
+  return error instanceof DiscordAPIError && error.code === 10008;
+}
+
+export class LiveServerService {
+  private readonly mutex = new KeyedMutex();
+
+  constructor(
+    private readonly client: Client,
+    private readonly repository: ListingRepository,
+    private readonly config: Config,
+    private readonly now: () => number = Date.now,
+    private readonly privateServerVerifier: PrivateServerVerifier = new RobloxPrivateServerVerifier()
+  ) {}
+
+  findActive(guildId: string, ownerId: string, type: ServerType): Listing | null {
+    return this.repository.getActiveForOwner(guildId, ownerId, type);
+  }
+
+  get(id: string): Listing | null {
+    return this.repository.get(id);
+  }
+
+  private roleId(type: ServerType): string {
+    return type === "carmine" ? this.config.carmineRoleId : this.config.xpRoleId;
+  }
+
+  private async textChannel(id: string): Promise<GuildTextBasedChannel> {
+    const channel = await this.client.channels.fetch(id);
+    if (!channel?.isTextBased() || channel.isDMBased()) throw new Error(`Configured channel ${id} is not a guild text channel.`);
+    return channel;
+  }
+
+  async create(guildId: string, ownerId: string, type: ServerType, url: string): Promise<ServiceResult> {
+    return this.mutex.run(`owner:${guildId}:${ownerId}:${type}`, async () => {
+      const existing = this.findActive(guildId, ownerId, type);
+      if (existing) return { ok: false, message: "You already have an active listing of this type. Use its control panel instead." };
+
+      const verification = await this.privateServerVerifier.verify(url);
+      if (!verification.valid) return { ok: false, message: this.verificationFailureMessage(verification) };
+
+      const createdAt = this.now();
+      let listing: Listing;
+      try {
+        listing = this.repository.create({
+          guildId, ownerId, type, url: verification.originalUrl,
+          liveChannelId: this.config.liveChannelId,
+          liveMessageId: null,
+          controlChannelId: this.config.commandsChannelId,
+          controlMessageId: null,
+          createdAt,
+          expiresAt: createdAt + LISTING_LIFETIME_MS
+        });
+      } catch (error) {
+        if (String(error).includes("UNIQUE constraint failed")) {
+          return { ok: false, message: "You already have an active listing of this type. Use its control panel instead." };
+        }
+        throw error;
+      }
+
+      try {
+        const liveChannel = await this.textChannel(this.config.liveChannelId);
+        const postedLive = await liveChannel.send(liveMessage(listing, this.roleId(type)));
+        this.repository.setMessageIds(listing.id, postedLive.id, null, this.now());
+        listing = this.repository.get(listing.id)!;
+
+        const controlChannel = await this.textChannel(this.config.commandsChannelId);
+        const postedControl = await controlChannel.send(controlMessage(listing));
+        this.repository.setControlMessageId(listing.id, postedControl.id, this.now());
+        return { ok: true, listing: this.repository.get(listing.id)!, message: `Your listing is live. Manage it with the control panel below.` };
+      } catch (error) {
+        this.repository.deactivate(listing.id, "creation_failed", this.now());
+        await this.cleanup(listing.id);
+        console.error("Failed to create listing", listing.id, error);
+        return { ok: false, message: "I could not publish the listing. Please check my channel and role permissions, then try again." };
+      }
+    });
+  }
+
+  async changeUrl(id: string, ownerId: string, url: string): Promise<ServiceResult> {
+    return this.mutex.run(id, async () => {
+      let listing = this.repository.get(id);
+      const invalid = this.validateOwnerAndActive(listing, ownerId);
+      if (invalid) return invalid;
+
+      const verification = await this.privateServerVerifier.verify(url);
+      if (!verification.valid) return { ok: false, message: this.verificationFailureMessage(verification) };
+
+      // The server may have expired while Roblox verification was in flight.
+      listing = this.repository.get(id);
+      const invalidAfterVerification = this.validateOwnerAndActive(listing, ownerId);
+      if (invalidAfterVerification) return invalidAfterVerification;
+      listing = this.repository.updateUrl(id, verification.originalUrl, this.now())!;
+      try {
+        await this.editLive(listing);
+        return { ok: true, listing, message: "The server link was updated. The expiration time did not change." };
+      } catch (error) {
+        console.error("Failed to edit live listing", id, error);
+        await this.failListing(id, "live_message_edit_failed");
+        return { ok: false, message: "The live message could not be updated, so the listing was ended safely. Please create a new one." };
+      }
+    });
+  }
+
+  async extend(id: string, ownerId: string): Promise<ServiceResult> {
+    return this.mutex.run(id, async () => {
+      const current = this.repository.get(id);
+      const invalid = this.validateOwnerAndActive(current, ownerId);
+      if (invalid) return invalid;
+      const result = this.repository.extend(id, this.now());
+      if (!result.ok) {
+        if (result.reason === "too_early") return { ok: false, message: "You can extend this server once there are 10 minutes or less remaining." };
+        if (result.reason === "expired") await this.expire(id);
+        return { ok: false, message: "This listing is no longer active." };
+      }
+      try {
+        await Promise.all([this.editLive(result.listing), this.editControl(result.listing)]);
+        return { ok: true, listing: result.listing, message: "Extended by exactly 1 hour from the previous expiration time." };
+      } catch (error) {
+        console.error("Failed to reflect extension", id, error);
+        await this.failListing(id, "message_edit_failed");
+        return { ok: false, message: "Discord could not update the listing, so it was ended safely. Please create a new one." };
+      }
+    });
+  }
+
+  async end(id: string, ownerId: string): Promise<ServiceResult> {
+    return this.mutex.run(id, async () => {
+      const listing = this.repository.get(id);
+      const invalid = this.validateOwnerAndActive(listing, ownerId);
+      if (invalid) return invalid;
+      const ended = this.repository.deactivate(id, "owner_ended", this.now())!;
+      await this.cleanup(id);
+      return { ok: true, listing: ended, message: "Your server listing has ended." };
+    });
+  }
+
+  async expire(id: string): Promise<void> {
+    await this.mutex.run(id, async () => {
+      const claimed = this.repository.claimIfExpired(id, this.now());
+      if (claimed) await this.cleanup(id);
+    });
+  }
+
+  async expireDue(): Promise<void> {
+    const now = this.now();
+    for (const listing of this.repository.listActive()) {
+      if (listing.expiresAt <= now) await this.expire(listing.id);
+    }
+    for (const listing of this.repository.listCleanupPending()) await this.cleanup(listing.id);
+  }
+
+  async reconcileActive(): Promise<void> {
+    for (const listing of this.repository.listActive()) {
+      if (listing.expiresAt <= this.now()) {
+        await this.expire(listing.id);
+        continue;
+      }
+      if (!listing.liveMessageId) {
+        await this.failListing(listing.id, "missing_live_message");
+        continue;
+      }
+      try {
+        const channel = await this.textChannel(listing.liveChannelId);
+        await channel.messages.fetch(listing.liveMessageId);
+      } catch (error) {
+        if (isUnknownMessage(error)) await this.failListing(listing.id, "live_message_deleted");
+        else console.error("Could not reconcile listing", listing.id, error);
+      }
+    }
+    await this.expireDue();
+  }
+
+  async handleDeletedMessage(messageId: string): Promise<void> {
+    const listing = this.repository.getActiveByLiveMessage(messageId);
+    if (listing) await this.failListing(listing.id, "live_message_deleted");
+  }
+
+  private validateOwnerAndActive(listing: Listing | null, ownerId: string): { ok: false; message: string } | null {
+    if (!listing) return { ok: false, message: "That listing no longer exists." };
+    if (listing.ownerId !== ownerId) return { ok: false, message: "Only the person who created this listing can use its controls." };
+    if (!listing.active || listing.expiresAt <= this.now()) return { ok: false, message: "This listing is no longer active." };
+    return null;
+  }
+
+  private verificationFailureMessage(result: Extract<RobloxVerificationResult, { valid: false }>): string {
+    if (result.reason === "invalid_url") {
+      return "That is not a valid Roblox private-server link.";
+    }
+    if (result.reason === "wrong_place") {
+      return "This private server is not for Tower of Hell.";
+    }
+    return "I couldn't verify this private server. Please try again.";
+  }
+
+  private async failListing(id: string, reason: string): Promise<void> {
+    this.repository.deactivate(id, reason, this.now());
+    await this.cleanup(id);
+  }
+
+  private async fetchMessage(channelId: string, messageId: string): Promise<Message> {
+    const channel = await this.textChannel(channelId);
+    return channel.messages.fetch(messageId);
+  }
+
+  private async editLive(listing: Listing): Promise<void> {
+    if (!listing.liveMessageId) throw new Error("Listing has no live message ID.");
+    const message = await this.fetchMessage(listing.liveChannelId, listing.liveMessageId);
+    await message.edit(liveMessage(listing, this.roleId(listing.type)));
+  }
+
+  private async editControl(listing: Listing): Promise<void> {
+    if (!listing.controlMessageId) return;
+    const message = await this.fetchMessage(listing.controlChannelId, listing.controlMessageId);
+    await message.edit(controlMessage(listing));
+  }
+
+  private async cleanup(id: string): Promise<void> {
+    const listing = this.repository.get(id);
+    if (!listing) return;
+    let liveDone = !listing.liveMessageId;
+    let controlDone = !listing.controlMessageId;
+    if (listing.liveMessageId) {
+      try {
+        const message = await this.fetchMessage(listing.liveChannelId, listing.liveMessageId);
+        await message.delete();
+        liveDone = true;
+      } catch (error) {
+        if (isUnknownMessage(error)) liveDone = true;
+        else console.error("Failed to delete live message; will retry", listing.id, error);
+      }
+    }
+    if (listing.controlMessageId) {
+      try {
+        const message = await this.fetchMessage(listing.controlChannelId, listing.controlMessageId);
+        await message.edit(controlMessage(listing, true));
+        controlDone = true;
+      } catch (error) {
+        if (isUnknownMessage(error)) controlDone = true;
+        else console.error("Failed to disable control panel; will retry", listing.id, error);
+      }
+    }
+    if (liveDone && controlDone) this.repository.finishCleanup(id, this.now());
+  }
+}
