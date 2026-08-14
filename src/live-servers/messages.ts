@@ -75,7 +75,7 @@ export function controlMessage(listing: Listing, disabled = !listing.active): Me
         .setDescription(
           `**Status:** ${status}\n` +
           `**Expires:** ${discordTimestamp(listing.expiresAt, "R")}\n` +
-          `**Extension:** 🔒 Available during the final 10 minutes`
+          `**Extension:** 🔒 Available during the final 30 minutes`
         )
         .setFooter({ text: `Listing ${listing.id}` })
     ],

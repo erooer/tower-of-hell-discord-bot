@@ -208,7 +208,7 @@ export class LiveServerService {
       if (invalid) return invalid;
       const result = this.repository.extend(id, this.now());
       if (!result.ok) {
-        if (result.reason === "too_early") return { ok: false, message: "You can extend this server once there are 10 minutes or less remaining." };
+        if (result.reason === "too_early") return { ok: false, message: "You can extend this server once there are 30 minutes or less remaining." };
         if (result.reason === "expired") await this.expire(id);
         return { ok: false, message: "This listing is no longer active." };
       }

@@ -87,9 +87,16 @@ describe("ListingRepository", () => {
     }
   });
 
-  it("blocks early extensions", () => {
+  it.each([
+    { minutes: 31, allowed: false },
+    { minutes: 30, allowed: true },
+    { minutes: 20, allowed: true },
+    { minutes: 5, allowed: true }
+  ])("extension eligibility with $minutes minutes remaining is $allowed", ({ minutes, allowed }) => {
     const listing = create();
-    expect(repository.extend(listing.id, listing.expiresAt - 10 * 60_000 - 1)).toEqual({ ok: false, reason: "too_early" });
+    const result = repository.extend(listing.id, listing.expiresAt - minutes * 60_000);
+    expect(result.ok).toBe(allowed);
+    if (!allowed) expect(result).toEqual({ ok: false, reason: "too_early" });
   });
 
   it("extends exactly one hour from the current expiration and prevents stacking", () => {

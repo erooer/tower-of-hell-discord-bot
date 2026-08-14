@@ -116,7 +116,7 @@ Use a test server or temporary roles/channels before production.
 6. **Change link:** Press **Change Link**, submit another valid URL, and verify the existing live message changes while its message ID and expiration stay the same and no role is repinged.
 7. **Ownership:** As a different user, trigger a copied button custom ID or interact with the visible panel; verify the ephemeral ownership rejection and unchanged record.
 8. **Early extension:** Press **Extend +1h** with more than ten minutes remaining; verify rejection.
-9. **Eligible extension:** For a practical test, create a listing and adjust its `expires_at` in a disposable database to 5–10 minutes ahead. Press **Extend +1h** and verify exactly 3,600,000 ms is added to the old expiration, both messages update, and an immediate second click is rejected.
+9. **Eligible extension:** For a practical test, create a listing and adjust its `expires_at` in a disposable database to 5–30 minutes ahead. Press **Extend +1h** and verify exactly 3,600,000 ms is added to the old expiration, both messages update, and an immediate second click is rejected.
 10. **Manual end:** Press **End Session**; verify immediate deletion from `#live-servers`, disabled controls, ephemeral confirmation, and no extra live-channel message.
 11. **Automatic expiration:** In a disposable database, set an active record's `expires_at` to the near future. Verify the bot deletes the live message and disables controls after the configured poll interval without posting an expiration notice.
 12. **Restart persistence:** Create a listing, stop and restart the bot, and verify it remains manageable with the same expiration. Then stop the bot, set/wait for expiration, restart, and verify immediate cleanup.

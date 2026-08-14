@@ -128,6 +128,8 @@ describe("Discord message builders", () => {
     expect(activeJson).toContain("lsv1:end:listing-id");
     expect(activeJson).toContain('"label":"End Session"');
     expect(activeJson).not.toContain('"label":"End Server"');
+    expect(JSON.stringify(active.embeds)).toContain("Available during the final 30 minutes");
+    expect(JSON.stringify(active.embeds)).not.toContain("final 10 minutes");
     const ended = controlMessage({ ...listing, active: false }, true);
     const endedJson = JSON.stringify(ended.components);
     expect(endedJson.match(/\"disabled\":true/g)).toHaveLength(3);

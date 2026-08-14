@@ -48,7 +48,7 @@ export type Listing = {
 };
 
 export const LISTING_LIFETIME_MS = 2 * 60 * 60 * 1_000;
-export const EXTENSION_WINDOW_MS = 10 * 60 * 1_000;
+export const EXTENSION_WINDOW_MS = 30 * 60 * 1_000;
 export const EXTENSION_MS = 60 * 60 * 1_000;
 
 export function typeLabel(type: ServerType): string {
