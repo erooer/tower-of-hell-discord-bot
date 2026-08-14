@@ -21,6 +21,7 @@ export type ServiceResult = { ok: true; listing: Listing; message?: string } | {
 
 export interface HostStatusProvider {
   isHostBlacklisted(userId: string): boolean;
+  getReportCount?(sessionId: string): number;
 }
 
 export type HostingEligibility =
@@ -92,6 +93,10 @@ export class LiveServerService {
     return type === "carmine" ? this.config.carmineRoleId : this.config.xpRoleId;
   }
 
+  private reportCount(sessionId: string): number {
+    return this.hostStatus.getReportCount?.(sessionId) ?? 0;
+  }
+
   private async textChannel(id: string): Promise<GuildTextBasedChannel> {
     const channel = await this.client.channels.fetch(id);
     if (!channel?.isTextBased() || channel.isDMBased()) throw new Error(`Configured channel ${id} is not a guild text channel.`);
@@ -127,7 +132,7 @@ export class LiveServerService {
 
       try {
         const liveChannel = await this.textChannel(this.config.liveChannelId);
-        const postedLive = await liveChannel.send(liveMessage(listing, this.roleId(type)));
+        const postedLive = await liveChannel.send(liveMessage(listing, this.roleId(type), this.reportCount(listing.id)));
         this.repository.setMessageIds(listing.id, postedLive.id, null, this.now());
         listing = this.repository.get(listing.id)!;
 
@@ -244,7 +249,7 @@ export class LiveServerService {
         const message = await channel.messages.fetch(listing.liveMessageId);
         // Reapply the canonical payload after a restart. This repairs partial or
         // pre-upgrade messages and guarantees the Join Server button is present.
-        await message.edit(liveMessage(listing, this.roleId(listing.type)));
+        await message.edit(liveMessage(listing, this.roleId(listing.type), this.reportCount(listing.id)));
       } catch (error) {
         if (isUnknownMessage(error)) await this.failListing(listing.id, "live_message_deleted");
         else console.error("Could not reconcile listing", listing.id, error);
@@ -256,6 +261,14 @@ export class LiveServerService {
   async handleDeletedMessage(messageId: string): Promise<void> {
     const listing = this.repository.getActiveByLiveMessage(messageId);
     if (listing) await this.failListing(listing.id, "live_message_deleted");
+  }
+
+  async refreshLiveAnnouncement(id: string): Promise<void> {
+    await this.mutex.run(id, async () => {
+      const listing = this.repository.get(id);
+      if (!listing || !listing.active || listing.expiresAt <= this.now()) return;
+      await this.editLive(listing);
+    });
   }
 
   private validateOwnerAndActive(listing: Listing | null, ownerId: string): { ok: false; message: string } | null {
@@ -288,7 +301,7 @@ export class LiveServerService {
   private async editLive(listing: Listing): Promise<void> {
     if (!listing.liveMessageId) throw new Error("Listing has no live message ID.");
     const message = await this.fetchMessage(listing.liveChannelId, listing.liveMessageId);
-    await message.edit(liveMessage(listing, this.roleId(listing.type)));
+    await message.edit(liveMessage(listing, this.roleId(listing.type), this.reportCount(listing.id)));
   }
 
   private async editControl(listing: Listing): Promise<void> {

@@ -8,21 +8,21 @@ import {
 } from "discord.js";
 import type { Listing } from "./model.js";
 import { typeLabel } from "./model.js";
+import { REPORT_THRESHOLD } from "../moderation/model.js";
 
 function discordTimestamp(ms: number, style: "t" | "R"): string {
   return `<t:${Math.floor(ms / 1_000)}:${style}>`;
 }
 
-export function liveMessage(listing: Listing, roleId: string): MessageCreateOptions & MessageEditOptions {
+export function liveMessage(listing: Listing, roleId: string, reportCount = 0): MessageCreateOptions & MessageEditOptions {
   const title = listing.type === "carmine" ? "🔥 Carmine Hunting" : "⚡ XP Grinding Server";
   const joinRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
-      .setCustomId(`lsjoin:open:${listing.id}`)
       .setLabel("Join Server")
-      .setStyle(ButtonStyle.Primary),
+      .setStyle(ButtonStyle.Link)
+      .setURL(listing.url),
     new ButtonBuilder()
       .setCustomId(`lsreport:submit:${listing.id}`)
-      .setLabel("Report")
       .setEmoji("⚠️")
       .setStyle(ButtonStyle.Danger)
   );
@@ -36,7 +36,8 @@ export function liveMessage(listing: Listing, roleId: string): MessageCreateOpti
         .addFields(
           { name: "Host", value: `<@${listing.ownerId}>`, inline: true },
           { name: "Started", value: discordTimestamp(listing.createdAt, "t"), inline: true },
-          { name: "Expires", value: discordTimestamp(listing.expiresAt, "R"), inline: false }
+          { name: "Expires", value: discordTimestamp(listing.expiresAt, "R"), inline: true },
+          { name: "Reports", value: `⚠️ ${reportCount}/${REPORT_THRESHOLD}`, inline: true }
         )
     ],
     components: [joinRow]

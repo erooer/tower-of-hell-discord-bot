@@ -31,7 +31,6 @@ export function registerInteractionRouter(
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
       if (interaction.isChatInputCommand()) await handleCommand(interaction, service, config);
-      else if (interaction.isButton() && interaction.customId.startsWith("lsjoin:")) await handleJoinButton(interaction, service);
       else if (interaction.isButton() && interaction.customId.startsWith("lsreport:")) await handleReportButton(interaction, moderation);
       else if (interaction.isModalSubmit() && interaction.customId.startsWith("lsreport:form:")) {
         await handleReportModal(interaction, moderation);
@@ -65,20 +64,6 @@ async function handleReportButton(interaction: ButtonInteraction, moderation: Mo
     return;
   }
   await interaction.showModal(createLiveServerReportModal(sessionId));
-}
-
-async function handleJoinButton(interaction: ButtonInteraction, service: LiveServerService): Promise<void> {
-  const [, action, id] = interaction.customId.split(":");
-  if (action !== "open" || !id) return;
-  const listing = service.get(id);
-  if (!listing || !listing.active || listing.guildId !== interaction.guildId) {
-    await interaction.reply({ content: "This listing is no longer active.", flags: MessageFlags.Ephemeral });
-    return;
-  }
-  await interaction.reply({
-    content: `Join this server: ${listing.url}`,
-    flags: MessageFlags.Ephemeral
-  });
 }
 
 async function handleReportModal(

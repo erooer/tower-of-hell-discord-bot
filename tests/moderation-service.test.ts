@@ -32,6 +32,7 @@ describe("ModerationService", () => {
   let fetchMessage: ReturnType<typeof vi.fn>;
   let client: Client;
   let moderationEnd: ReturnType<typeof vi.fn>;
+  let refreshLiveAnnouncement: ReturnType<typeof vi.fn>;
   let service: ModerationService;
 
   beforeEach(() => {
@@ -50,7 +51,8 @@ describe("ModerationService", () => {
     const channel = { isTextBased: () => true, isDMBased: () => false, send, messages: { fetch: fetchMessage } };
     client = { channels: { fetch: vi.fn(async () => channel) } } as unknown as Client;
     moderationEnd = vi.fn(async () => listing);
-    const liveServers = { moderationEnd } as unknown as LiveServerService;
+    refreshLiveAnnouncement = vi.fn(async () => undefined);
+    const liveServers = { moderationEnd, refreshLiveAnnouncement } as unknown as LiveServerService;
     service = new ModerationService(client, listings, repository, liveServers, config, () => now + 1_000);
   });
   afterEach(() => database.close());
@@ -67,6 +69,7 @@ describe("ModerationService", () => {
       ok: true, message: "Eligible to report."
     });
     expect(repository.getReportCount(listing.id)).toBe(0);
+    expect(refreshLiveAnnouncement).not.toHaveBeenCalled();
 
     const submissions = [
       ["user-host", "host_not_in_server", ""],
@@ -83,6 +86,7 @@ describe("ModerationService", () => {
       expect.objectContaining({ userId: "user-category", reason: "wrong_category", details: "Optional context" }),
       expect.objectContaining({ userId: "user-other", reason: "other", details: "Host keeps posting an expired link" })
     ]));
+    expect(refreshLiveAnnouncement).toHaveBeenCalledTimes(4);
   });
 
   it("rejects forged reasons, missing Other details, and oversized details without counting", async () => {
@@ -96,6 +100,27 @@ describe("ModerationService", () => {
       ok: false, message: "Additional details must be 300 characters or fewer."
     });
     expect(repository.getReportCount(listing.id)).toBe(0);
+    expect(refreshLiveAnnouncement).not.toHaveBeenCalled();
+  });
+
+  it("updates the public counter after accepted reports one through eight without capping at seven", async () => {
+    const verifier: PrivateServerVerifier = { verify: vi.fn() };
+    const liveService = new LiveServerService(client, listings, config, () => now + 1_000, verifier, repository);
+    const integrated = new ModerationService(client, listings, repository, liveService, config, () => now + 1_000);
+
+    for (let index = 1; index <= 8; index += 1) {
+      expect((await integrated.report(listing.id, `counter-${index}`, "guild", "server_missing", "")).ok).toBe(true);
+    }
+
+    const publicPayloads = edit.mock.calls
+      .map((call) => JSON.stringify(call[0]))
+      .filter((payload) => payload.includes('"name":"Reports"'));
+    expect(publicPayloads).toHaveLength(8);
+    expect(publicPayloads[0]).toContain('"value":"⚠️ 1/7"');
+    expect(publicPayloads[5]).toContain('"value":"⚠️ 6/7"');
+    expect(publicPayloads[6]).toContain('"value":"⚠️ 7/7"');
+    expect(publicPayloads[7]).toContain('"value":"⚠️ 8/7"');
+    expect(send).toHaveBeenCalledOnce();
   });
 
   it("posts one staff case at report seven and report eight only edits it", async () => {
@@ -132,6 +157,7 @@ describe("ModerationService", () => {
     expect(service.checkReportEligibility(listing.id, "troll", "guild").message)
       .toBe("You've been blacklisted from reporting. Contact a moderator to appeal.");
     expect(repository.getReportCount(listing.id)).toBe(1);
+    expect(refreshLiveAnnouncement).toHaveBeenCalledOnce();
   });
 
   it("view reporters returns unique histories and supports safe target blacklisting", async () => {
@@ -210,6 +236,9 @@ describe("ModerationService", () => {
     const editedPayloads = edit.mock.calls.map((call) => JSON.stringify(call[0]));
     expect(editedPayloads.some((payload) => payload.includes(`lsreport:submit:${listing.id}`))).toBe(true);
     expect(editedPayloads.some((payload) => payload.includes(replacementUrl))).toBe(true);
+    const publicPayloads = editedPayloads.filter((payload) => payload.includes('"name":"Reports"'));
+    expect(publicPayloads).toHaveLength(2);
+    expect(publicPayloads.every((payload) => payload.includes('"value":"⚠️ 7/7"'))).toBe(true);
   });
 
   it("a host blacklisted at three strikes is rejected before URL verification or Discord publishing", async () => {

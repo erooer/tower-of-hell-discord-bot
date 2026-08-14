@@ -78,6 +78,9 @@ export class ModerationService {
           ? { ok: false, message: "You've been blacklisted from reporting. Contact a moderator to appeal." }
           : { ok: false, message: "You have already reported this server." };
       }
+      await this.liveServers.refreshLiveAnnouncement(sessionId).catch((error) => {
+        console.error("Failed to update the public report counter; restart reconciliation will retry", sessionId, error);
+      });
       if (result.moderationCase) {
         await this.syncCaseMessage(sessionId).catch((error) => {
           console.error("Failed to publish/update moderation case; restart reconciliation will retry", sessionId, error);

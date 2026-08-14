@@ -8,6 +8,7 @@ import type { PrivateServerVerifier, RobloxVerificationResult } from "../src/rob
 import { openDatabase } from "../src/storage/database.js";
 import { ListingRepository } from "../src/storage/listing-repository.js";
 import { HostCooldownRepository, HOST_COOLDOWN_MS } from "../src/storage/host-cooldown-repository.js";
+import { ModerationRepository } from "../src/storage/moderation-repository.js";
 
 const oldUrl = "https://www.roblox.com/games/1962086868/Tower-of-Hell?privateServerLinkCode=OldCode12345";
 const newUrl = "https://www.roblox.com/share?code=NewCode12345&type=Server";
@@ -214,21 +215,25 @@ describe("LiveServerService verification boundary", () => {
     const verifier: PrivateServerVerifier = {
       verify: vi.fn(async () => ({ valid: false as const, reason: "unresolved" as const }))
     };
-    const service = new LiveServerService(client, repository, config, () => 1_800_000_100_000, verifier);
+    const moderation = new ModerationRepository(database);
+    for (let index = 1; index <= 6; index += 1) {
+      moderation.submitReport(listing, `reporter-${index}`, "staff", listing.createdAt + index);
+    }
+    const service = new LiveServerService(client, repository, config, () => 1_800_000_100_000, verifier, moderation);
 
     await service.reconcileActive();
 
     expect(fetchMessage).toHaveBeenCalledWith(listing.liveMessageId);
     expect(edit).toHaveBeenCalledOnce();
     const recoveredPayload = edit.mock.calls[0]?.[0];
-    expect(JSON.stringify(recoveredPayload)).toBe(JSON.stringify(liveMessage(listing, config.xpRoleId)));
+    expect(JSON.stringify(recoveredPayload)).toBe(JSON.stringify(liveMessage(listing, config.xpRoleId, 6)));
     expect(JSON.stringify(recoveredPayload)).toContain('"title":"⚡ XP Grinding Server"');
     expect(JSON.stringify(recoveredPayload)).toContain('"value":"<@owner>"');
     expect(JSON.stringify(recoveredPayload)).toContain('"value":"<t:1800000000:t>"');
     expect(JSON.stringify(recoveredPayload)).toContain('"value":"<t:1800007200:R>"');
+    expect(JSON.stringify(recoveredPayload)).toContain('"value":"⚠️ 6/7"');
     expect(JSON.stringify(recoveredPayload)).toContain('"label":"Join Server"');
-    expect(JSON.stringify(recoveredPayload)).toContain('"style":1');
-    expect(JSON.stringify(recoveredPayload)).toContain(`"custom_id":"lsjoin:open:${listing.id}"`);
-    expect(JSON.stringify(recoveredPayload)).not.toContain(oldUrl);
+    expect(JSON.stringify(recoveredPayload)).toContain('"style":5');
+    expect(JSON.stringify(recoveredPayload)).toContain(oldUrl);
   });
 });

@@ -106,26 +106,3 @@ describe("/hostgrind interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: message, flags: MessageFlags.Ephemeral });
   });
 });
-
-describe("blue Join Server interaction", () => {
-  it("uses the listing's latest persisted URL after Change Link", async () => {
-    const replacementUrl = "https://www.roblox.com/share?code=Replacement123&type=Server";
-    const handler = installRouter({
-      get: vi.fn(() => ({
-        id: "listing", guildId: "guild", ownerId: "host", type: "xp" as const, url: replacementUrl,
-        liveChannelId: "live", liveMessageId: "message", controlChannelId: "commands", controlMessageId: "control",
-        createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
-        endedAt: null, endedReason: null, updatedAt: 1_800_000_000_000
-      }))
-    });
-    const reply = vi.fn(async (_payload: unknown) => undefined);
-    await handler({
-      ...classifiers("button"), customId: "lsjoin:open:listing", guildId: "guild", user: { id: "viewer" },
-      reply, followUp: vi.fn(), deferred: false, replied: false
-    });
-    expect(reply).toHaveBeenCalledWith({
-      content: `Join this server: ${replacementUrl}`,
-      flags: MessageFlags.Ephemeral
-    });
-  });
-});

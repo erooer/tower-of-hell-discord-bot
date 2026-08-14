@@ -32,7 +32,8 @@ describe("Discord message builders", () => {
       fields: [
         { name: "Host", value: "<@12345678901234567>", inline: true },
         { name: "Started", value: "<t:1800000000:t>", inline: true },
-        { name: "Expires", value: "<t:1800007200:R>", inline: false }
+        { name: "Expires", value: "<t:1800007200:R>", inline: true },
+        { name: "Reports", value: "⚠️ 0/7", inline: true }
       ]
     });
     expect(embed.description).toBeUndefined();
@@ -41,21 +42,27 @@ describe("Discord message builders", () => {
 
     const componentsJson = JSON.stringify(message.components);
     expect(componentsJson).toContain('"label":"Join Server"');
-    expect(componentsJson).toContain('"style":1');
-    expect(componentsJson).toContain(`"custom_id":"lsjoin:open:${typedListing.id}"`);
-    expect(componentsJson).not.toContain(typedListing.url);
+    expect(componentsJson).toContain('"style":5');
+    expect(componentsJson).toContain(`"url":"${typedListing.url}"`);
     expect(componentsJson).toContain(`"custom_id":"lsreport:submit:${typedListing.id}"`);
-    expect(componentsJson).toContain('"label":"Report"');
+    expect(componentsJson).toContain('"emoji":{"name":"⚠️"');
+    expect(componentsJson).not.toContain('"label":"Report"');
   });
 
-  it("keeps the canonical blue Join Server control when Change Link updates persisted state", () => {
+  it.each([0, 1, 6, 7, 8, 10])("displays the real unique report count %i against the threshold", (count) => {
+    const embed = firstEmbed(liveMessage(listing, "98765432109876543", count));
+    expect(embed.fields?.[3]).toEqual({ name: "Reports", value: `⚠️ ${count}/7`, inline: true });
+  });
+
+  it("updates the direct Join Server URL when Change Link updates persisted state", () => {
     const replacementUrl = "https://www.roblox.com/share?code=Replacement123&type=Server";
     const original = liveMessage(listing, "98765432109876543");
     const changed = liveMessage({ ...listing, url: replacementUrl }, "98765432109876543");
 
     expect(JSON.stringify(original.embeds)).toBe(JSON.stringify(changed.embeds));
-    expect(JSON.stringify(changed.components)).toBe(JSON.stringify(original.components));
-    expect(JSON.stringify(changed.components)).not.toContain(replacementUrl);
+    expect(JSON.stringify(original.components)).toContain(listing.url);
+    expect(JSON.stringify(changed.components)).toContain(replacementUrl);
+    expect(JSON.stringify(changed.components)).not.toContain(listing.url);
   });
 
   it("changes only the expiration display when a listing is extended", () => {
@@ -68,13 +75,14 @@ describe("Discord message builders", () => {
       fields: [
         { name: "Host", value: "<@12345678901234567>" },
         { name: "Started", value: "<t:1800000000:t>" },
-        { name: "Expires", value: "<t:1800010800:R>" }
+        { name: "Expires", value: "<t:1800010800:R>" },
+        { name: "Reports", value: "⚠️ 0/7" }
       ]
     });
     expect(extendedEmbed?.fields?.[0]).toEqual(originalEmbed?.fields?.[0]);
     expect(extendedEmbed?.fields?.[1]).toEqual(originalEmbed?.fields?.[1]);
-    expect(JSON.stringify(extended.components)).toContain('"style":1');
-    expect(JSON.stringify(extended.components)).toContain(`lsjoin:open:${listing.id}`);
+    expect(JSON.stringify(extended.components)).toContain('"style":5');
+    expect(JSON.stringify(extended.components)).toContain(listing.url);
     expect(JSON.stringify(extended.components)).toContain('"label":"Join Server"');
   });
 
