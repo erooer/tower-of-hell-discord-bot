@@ -8,7 +8,7 @@ The SQLite database is the source of truth. Every listing stores its Discord mes
 
 - Node.js 20 or newer
 - A Discord application with a bot user
-- Three text channels: `#live-servers`, `#server-bot-cmds`, and a staff-only reports channel
+- Four text channels: `#live-servers`, `#server-bot-cmds`, a staff-only reports channel, and a private session-logs channel
 - Three roles: Carmine Hunt ping, XP Grinding ping, and a moderator/staff role
 
 No privileged gateway intents are required. In the Developer Portal, the bot only uses the standard `Guilds` and `Guild Messages` intents; Message Content, Server Members, and Presence can remain off.
@@ -28,6 +28,7 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
    - `CARMINE_ROLE_ID`: role pinged for Carmine Hunting
    - `XP_ROLE_ID`: role pinged for XP Grinding
    - `STAFF_REPORTS_CHANNEL_ID`: staff-only channel receiving escalated report cases
+   - `SESSION_LOGS_CHANNEL_ID`: private moderator channel receiving notable session-action logs
    - `MODERATOR_ROLE_ID`: role pinged on escalation and required for all moderation controls
    - `DISCORD_GUILD_ID`: server ID
    - `DISCORD_CLIENT_ID`: application ID from the Developer Portal
@@ -44,7 +45,7 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
 
 4. Ensure ordinary users cannot post in `#live-servers`. Give only approved private-server owners access to `#server-bot-cmds`, as intended by the server's role permissions.
 
-   Keep `STAFF_REPORTS_CHANNEL_ID` staff-only. The bot additionally verifies the configured moderator role, guild, and staff channel on every moderation button/select interaction; channel visibility alone is not trusted.
+   Keep `STAFF_REPORTS_CHANNEL_ID` and `SESSION_LOGS_CHANNEL_ID` staff-only. Both channels need **View Channel**, **Send Messages**, **Embed Links**, and **Read Message History**. The bot additionally verifies the configured moderator role and guild for `/hoststatus` and its controls; Administrator alone is not accepted.
 
 5. Register the guild commands (guild registration updates quickly):
 
@@ -77,6 +78,7 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 - A successful publication starts a persistent three-hour cooldown for that Discord user across both grind types. Members with the exact configured `MODERATOR_ROLE_ID` bypass only this cooldown; their successful listings still update cooldown history. Opening `/hostgrind`, selecting a type, failed publication, link changes, extensions, reports, and moderation do not move the cooldown.
 - Public announcements use a direct **Join Server** link button. Change Link and restart reconciliation rebuild it from the listing's latest verified URL, so its destination stays current.
 - Changing a link edits the original live message without pinging again or changing expiration.
+- **End Session** remains available to the session host and can also be used by a member with the exact configured moderator role. Moderator membership is refetched from Discord before the override is accepted; Change Link and Extend remain host-only.
 - Ending or expiration deletes the live message and disables the control panel. Nothing is posted to the live channel afterward.
 - If the live message is manually deleted, the record is ended and its control panel is disabled.
 - Transient Discord deletion/edit failures are logged; pending cleanup is retried every expiration sweep.
@@ -85,6 +87,8 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 - The first unique report creates one quiet persistent **Reported Session** panel in the staff channel. At seven reports, the same case gains one separate **Urgent Report** message and pings `MODERATOR_ROLE_ID` exactly once; later reports refresh both existing messages without another ping.
 - Staff cases show aggregated reason totals. Staff can inspect each reporter's reason, details, and history; blacklist troll reporters; ignore reports; or strike/remove the server. Ignored reports become rejected history; struck reports become valid history.
 - One struck session can create only one host strike. At three active strikes, the host is persistently blocked from creating new listings.
+- `/hoststatus user_id:<developer ID>` lets exact-role moderators inspect strikes, both blacklist types, report history, and hosting cooldowns without requiring the target to remain in the guild. Strike revocations, blacklist removals, and cooldown clearing are conditional, audited, and restart-safe.
+- Successful creation, extension, link change, host/moderator ending, natural expiration, manual public-message deletion, Strike / Remove, Reports Ignored, and strike-threshold host blacklisting write compact embeds only to `SESSION_LOGS_CHANNEL_ID`. End logs distinguish the original host, actual ending actor, and reason. Log failures never roll back the underlying action, and reconciliation does not fabricate event logs.
 - Reports, outcomes, cases, blacklists, and strike history share the SQLite database and are reconciled without duplicate case messages after restart.
 
 ## Automated checks

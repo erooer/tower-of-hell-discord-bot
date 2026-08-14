@@ -30,7 +30,10 @@ export function registerInteractionRouter(
 ): void {
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
-      if (interaction.isChatInputCommand()) await handleCommand(interaction, service, config);
+      if (interaction.isChatInputCommand()) await handleCommand(interaction, service, moderation, config);
+      else if (interaction.isButton() && interaction.customId.startsWith("hoststatus:")) {
+        await handleHostStatusButton(interaction, moderation, config);
+      }
       else if (interaction.isButton() && interaction.customId.startsWith("lsreport:")) await handleReportButton(interaction, moderation);
       else if (interaction.isModalSubmit() && interaction.customId.startsWith("lsreport:form:")) {
         await handleReportModal(interaction, moderation);
@@ -118,7 +121,7 @@ async function handleBlacklistSelect(
   await interaction.editReply(result.message);
 }
 
-function staffActor(interaction: ButtonInteraction | StringSelectMenuInteraction): StaffActor {
+function staffActor(interaction: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction): StaffActor {
   const roles = interaction.member?.roles;
   const roleIds = Array.isArray(roles) ? roles : roles?.cache.map((role) => role.id) ?? [];
   return {
@@ -129,7 +132,16 @@ function staffActor(interaction: ButtonInteraction | StringSelectMenuInteraction
   };
 }
 
-async function handleCommand(interaction: ChatInputCommandInteraction, service: LiveServerService, config: Config): Promise<void> {
+async function handleCommand(
+  interaction: ChatInputCommandInteraction,
+  service: LiveServerService,
+  moderation: ModerationService,
+  config: Config
+): Promise<void> {
+  if (interaction.commandName === "hoststatus") {
+    await handleHostStatusCommand(interaction, moderation, config);
+    return;
+  }
   if (interaction.commandName !== "hostgrind") return;
   if (interaction.channelId !== config.commandsChannelId || interaction.guildId !== config.guildId) {
     await interaction.reply({ content: `This command only works in <#${config.commandsChannelId}>.`, flags: MessageFlags.Ephemeral });
@@ -144,6 +156,52 @@ async function handleCommand(interaction: ChatInputCommandInteraction, service: 
     return;
   }
   await interaction.reply({ ...hostGrindSelector(), flags: MessageFlags.Ephemeral });
+}
+
+async function handleHostStatusCommand(
+  interaction: ChatInputCommandInteraction,
+  moderation: ModerationService,
+  config: Config
+): Promise<void> {
+  if (interaction.guildId !== config.guildId || !memberHasRole(interaction, config.moderatorRoleId)) {
+    await interaction.reply({
+      content: "You are not authorized to manage host moderation status.",
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+  const userId = interaction.options.getString("user_id", true).trim();
+  if (!/^[0-9]{17,20}$/.test(userId)) {
+    await interaction.reply({ content: "Enter a valid numeric Discord user ID.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const result = await moderation.hostStatus(userId, staffActor(interaction));
+  await interaction.editReply(result.hostStatusPayload ?? { content: result.message, embeds: [], components: [] });
+}
+
+async function handleHostStatusButton(
+  interaction: ButtonInteraction,
+  moderation: ModerationService,
+  config: Config
+): Promise<void> {
+  const [, action, userId, strikeId] = interaction.customId.split(":");
+  if (!action || !userId || !["strike", "host-unblacklist", "reporter-unblacklist", "cooldown"].includes(action)) return;
+  if (interaction.guildId !== config.guildId || !memberHasRole(interaction, config.moderatorRoleId)) {
+    await interaction.reply({
+      content: "You are not authorized to manage host moderation status.",
+      flags: MessageFlags.Ephemeral
+    });
+    return;
+  }
+  await interaction.deferUpdate();
+  const result = await moderation.updateHostStatus(
+    userId,
+    action as "strike" | "host-unblacklist" | "reporter-unblacklist" | "cooldown",
+    strikeId ?? null,
+    staffActor(interaction)
+  );
+  await interaction.editReply(result.hostStatusPayload ?? { content: result.message, embeds: [], components: [] });
 }
 
 async function handleHostGrindSelect(
@@ -177,7 +235,7 @@ async function handleHostGrindSelect(
 }
 
 function memberHasRole(
-  interaction: ChatInputCommandInteraction | StringSelectMenuInteraction,
+  interaction: ChatInputCommandInteraction | StringSelectMenuInteraction | ButtonInteraction,
   roleId: string
 ): boolean {
   const roles = interaction.member?.roles;
@@ -196,6 +254,12 @@ async function handleButton(
     await interaction.reply({ content: "This listing is no longer active.", flags: MessageFlags.Ephemeral });
     return;
   }
+  if (action === "end") {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const result = await service.end(id, interaction.user.id);
+    await interaction.editReply(result.message ?? "Done.");
+    return;
+  }
   if (interaction.user.id !== listing.ownerId) {
     await interaction.reply({ content: "Only the person who created this listing can use its controls.", flags: MessageFlags.Ephemeral });
     return;
@@ -207,9 +271,7 @@ async function handleButton(
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const result = action === "extend"
     ? await service.extend(id, interaction.user.id)
-    : action === "end"
-      ? await service.end(id, interaction.user.id)
-      : { ok: false as const, message: "Unknown control." };
+    : { ok: false as const, message: "Unknown control." };
   if (result.ok && action === "extend") await moderation.refreshCase(id);
   await interaction.editReply(result.message ?? "Done.");
 }

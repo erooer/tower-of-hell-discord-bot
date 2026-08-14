@@ -14,7 +14,7 @@ import { ModerationRepository } from "../src/storage/moderation-repository.js";
 const config: Config = {
   token: "token", clientId: "client", guildId: "guild", liveChannelId: "live",
   commandsChannelId: "commands", carmineRoleId: "carmine-role", xpRoleId: "xp-role",
-  staffReportsChannelId: "staff", moderatorRoleId: "moderator-role",
+  staffReportsChannelId: "staff", sessionLogsChannelId: "logs", moderatorRoleId: "moderator-role",
   databasePath: ":memory:", expirationPollMs: 15_000
 };
 const now = 1_800_000_000_000;

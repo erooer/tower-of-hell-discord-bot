@@ -16,6 +16,7 @@ import {
   type RobloxVerificationResult
 } from "../roblox/private-server-verifier.js";
 import type { HostCooldownStore } from "../storage/host-cooldown-repository.js";
+import { NO_SESSION_LOGGER, type SessionLogEvent, type SessionLogger } from "../logging/session-logger.js";
 
 export type ServiceResult = { ok: true; listing: Listing; message?: string } | { ok: false; message: string };
 
@@ -47,7 +48,8 @@ export class LiveServerService {
     private readonly now: () => number = Date.now,
     private readonly privateServerVerifier: PrivateServerVerifier = new RobloxPrivateServerVerifier(),
     private readonly hostStatus: HostStatusProvider = { isHostBlacklisted: () => false },
-    private readonly hostCooldowns: HostCooldownStore = NO_HOST_COOLDOWNS
+    private readonly hostCooldowns: HostCooldownStore = NO_HOST_COOLDOWNS,
+    private readonly sessionLogger: SessionLogger = NO_SESSION_LOGGER
   ) {}
 
   findActive(guildId: string, ownerId: string, type: ServerType): Listing | null {
@@ -154,6 +156,10 @@ export class LiveServerService {
         this.repository.setControlMessageId(listing.id, postedControl.id, this.now());
         listing = this.repository.get(listing.id)!;
         this.hostCooldowns.recordSuccessfulCreation(ownerId, listing.id, this.now());
+        await this.safeLog({
+          title: "Session Created", action: "Created a live-server session", listing,
+          actor: { kind: "host", userId: ownerId }, occurredAt: this.now()
+        });
         return { ok: true, listing, message: `Your listing is live. Manage it with the control panel below.` };
       } catch (error) {
         this.repository.deactivate(listing.id, "creation_failed", this.now());
@@ -180,6 +186,10 @@ export class LiveServerService {
       listing = this.repository.updateUrl(id, verification.originalUrl, this.now())!;
       try {
         await this.editLive(listing);
+        await this.safeLog({
+          title: "Server Link Changed", action: "Changed the private-server link", listing,
+          actor: { kind: "host", userId: ownerId }, occurredAt: this.now()
+        });
         return { ok: true, listing, message: "The server link was updated. The expiration time did not change." };
       } catch (error) {
         console.error("Failed to edit live listing", id, error);
@@ -202,6 +212,10 @@ export class LiveServerService {
       }
       try {
         await Promise.all([this.editLive(result.listing), this.editControl(result.listing)]);
+        await this.safeLog({
+          title: "Session Extended", action: "Extended session by +1 hour", listing: result.listing,
+          actor: { kind: "host", userId: ownerId }, occurredAt: this.now()
+        });
         return { ok: true, listing: result.listing, message: "Extended by exactly 1 hour from the previous expiration time." };
       } catch (error) {
         console.error("Failed to reflect extension", id, error);
@@ -214,28 +228,53 @@ export class LiveServerService {
   async end(id: string, ownerId: string): Promise<ServiceResult> {
     return this.mutex.run(id, async () => {
       const listing = this.repository.get(id);
-      const invalid = this.validateOwnerAndActive(listing, ownerId);
-      if (invalid) return invalid;
-      const ended = this.repository.deactivate(id, "owner_ended", this.now())!;
+      if (!listing) return { ok: false, message: "That listing no longer exists." };
+      if (!listing.active || listing.expiresAt <= this.now()) {
+        return { ok: false, message: "This listing is no longer active." };
+      }
+      const endedByHost = listing.ownerId === ownerId;
+      const endedByModerator = !endedByHost && await this.hasModeratorRole(listing.guildId, ownerId);
+      if (!endedByHost && !endedByModerator) {
+        return { ok: false, message: "Only the session host or a moderator can end this session." };
+      }
+      const ended = this.repository.deactivate(id, endedByHost ? "owner_ended" : "moderator_ended", this.now())!;
       await this.cleanup(id);
+      await this.safeLog({
+        title: "Session Ended", action: "Session manually ended", listing: ended,
+        actor: { kind: endedByHost ? "host" : "moderator", userId: ownerId }, occurredAt: this.now()
+      });
       return { ok: true, listing: ended, message: "Your server listing has ended." };
     });
   }
 
-  async moderationEnd(id: string): Promise<Listing | null> {
+  async moderationEnd(id: string, moderatorId?: string): Promise<Listing | null> {
     return this.mutex.run(id, async () => {
       const listing = this.repository.get(id);
       if (!listing || !listing.active) return listing;
       const ended = this.repository.deactivate(id, "moderation_strike", this.now());
       await this.cleanup(id);
+      if (ended && moderatorId) {
+        await this.safeLog({
+          title: "Session Removed", action: "Removed through moderation action (Strike / Remove)", listing: ended,
+          actor: { kind: "moderator", userId: moderatorId }, occurredAt: this.now()
+        });
+      }
       return ended;
     });
   }
 
-  async expire(id: string): Promise<void> {
+  async expire(id: string, writeLog = true): Promise<void> {
     await this.mutex.run(id, async () => {
       const claimed = this.repository.claimIfExpired(id, this.now());
-      if (claimed) await this.cleanup(id);
+      if (claimed) {
+        await this.cleanup(id);
+        if (writeLog) {
+          await this.safeLog({
+            title: "Session Ended", action: "Session expired", listing: claimed,
+            actor: { kind: "automatic" }, occurredAt: this.now()
+          });
+        }
+      }
     });
   }
 
@@ -250,7 +289,7 @@ export class LiveServerService {
   async reconcileActive(): Promise<void> {
     for (const listing of this.repository.listActive()) {
       if (listing.expiresAt <= this.now()) {
-        await this.expire(listing.id);
+        await this.expire(listing.id, false);
         continue;
       }
       if (!listing.liveMessageId) {
@@ -273,7 +312,15 @@ export class LiveServerService {
 
   async handleDeletedMessage(messageId: string): Promise<void> {
     const listing = this.repository.getActiveByLiveMessage(messageId);
-    if (listing) await this.failListing(listing.id, "live_message_deleted");
+    if (listing) {
+      await this.failListing(listing.id, "live_message_deleted");
+      const ended = this.repository.get(listing.id) ?? listing;
+      await this.safeLog({
+        title: "Session Ended", action: "Public listing manually deleted", listing: ended,
+        actor: { kind: "automatic", label: "Manual message deletion (actor unknown)" },
+        occurredAt: this.now()
+      });
+    }
   }
 
   async refreshLiveAnnouncement(id: string): Promise<void> {
@@ -304,6 +351,14 @@ export class LiveServerService {
   private async failListing(id: string, reason: string): Promise<void> {
     this.repository.deactivate(id, reason, this.now());
     await this.cleanup(id);
+  }
+
+  private async safeLog(event: SessionLogEvent): Promise<void> {
+    try {
+      await this.sessionLogger.log(event);
+    } catch (error) {
+      console.error("Failed to write session log", event.title, event.listing.id, error);
+    }
   }
 
   private async fetchMessage(channelId: string, messageId: string): Promise<Message> {

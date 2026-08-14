@@ -69,7 +69,9 @@ export function openDatabase(path: string): Database.Database {
       user_id TEXT PRIMARY KEY,
       blacklisted_at INTEGER NOT NULL,
       moderator_id TEXT NOT NULL,
-      reason TEXT
+      reason TEXT,
+      removed_at INTEGER,
+      removed_by TEXT
     );
 
     CREATE TABLE IF NOT EXISTS host_strikes (
@@ -78,7 +80,9 @@ export function openDatabase(path: string): Database.Database {
       session_id TEXT NOT NULL UNIQUE REFERENCES live_server_listings(id),
       moderator_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
-      active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1))
+      active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+      revoked_at INTEGER,
+      revoked_by TEXT
     );
     CREATE INDEX IF NOT EXISTS active_host_strikes
       ON host_strikes(host_id, active);
@@ -87,7 +91,10 @@ export function openDatabase(path: string): Database.Database {
       user_id TEXT PRIMARY KEY,
       blacklisted_at INTEGER NOT NULL,
       triggering_session_id TEXT NOT NULL REFERENCES live_server_listings(id),
-      moderator_id TEXT NOT NULL
+      moderator_id TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'strikes',
+      removed_at INTEGER,
+      removed_by TEXT
     );
 
     CREATE TABLE IF NOT EXISTS host_cooldowns (
@@ -95,10 +102,56 @@ export function openDatabase(path: string): Database.Database {
       listing_id TEXT NOT NULL REFERENCES live_server_listings(id),
       successful_creation_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS moderation_status_audit (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN (
+        'strike_revoked', 'host_blacklist_removed',
+        'reporter_blacklist_removed', 'cooldown_cleared'
+      )),
+      moderator_id TEXT NOT NULL,
+      related_id TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS moderation_status_audit_user
+      ON moderation_status_audit(user_id, created_at);
   `);
   migrateReportReasons(db);
   migrateModerationCasePanels(db);
+  migrateModerationStatus(db);
   return db;
+}
+
+function addColumnIfMissing(
+  db: Database.Database,
+  table: string,
+  columns: Set<string>,
+  name: string,
+  definition: string
+): void {
+  if (!columns.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+}
+
+function migrateModerationStatus(db: Database.Database): void {
+  const strikeColumns = new Set(
+    (db.prepare("PRAGMA table_info(host_strikes)").all() as Array<{ name: string }>).map((column) => column.name)
+  );
+  addColumnIfMissing(db, "host_strikes", strikeColumns, "revoked_at", "INTEGER");
+  addColumnIfMissing(db, "host_strikes", strikeColumns, "revoked_by", "TEXT");
+
+  const hostBlacklistColumns = new Set(
+    (db.prepare("PRAGMA table_info(host_blacklist)").all() as Array<{ name: string }>).map((column) => column.name)
+  );
+  addColumnIfMissing(db, "host_blacklist", hostBlacklistColumns, "source", "TEXT NOT NULL DEFAULT 'strikes'");
+  addColumnIfMissing(db, "host_blacklist", hostBlacklistColumns, "removed_at", "INTEGER");
+  addColumnIfMissing(db, "host_blacklist", hostBlacklistColumns, "removed_by", "TEXT");
+
+  const reporterBlacklistColumns = new Set(
+    (db.prepare("PRAGMA table_info(reporter_blacklist)").all() as Array<{ name: string }>).map((column) => column.name)
+  );
+  addColumnIfMissing(db, "reporter_blacklist", reporterBlacklistColumns, "removed_at", "INTEGER");
+  addColumnIfMissing(db, "reporter_blacklist", reporterBlacklistColumns, "removed_by", "TEXT");
 }
 
 function migrateReportReasons(db: Database.Database): void {

@@ -39,17 +39,38 @@ export type SubmitReportResult =
 
 export type ResolveCaseResult =
   | { ok: false; reason: "missing" | "resolved" }
-  | { ok: true; moderationCase: ModerationCase; strikeCount: number; hostBlacklisted: boolean };
+  | {
+      ok: true; moderationCase: ModerationCase; strikeCount: number;
+      hostBlacklisted: boolean; hostBlacklistedNow: boolean;
+    };
+
+export type HostModerationStatus = {
+  strikeCount: number;
+  latestActiveStrikeId: string | null;
+  latestStrikeAt: number | null;
+  hostBlacklisted: boolean;
+  hostBlacklistedAt: number | null;
+  reporterBlacklisted: boolean;
+  reporterBlacklistedAt: number | null;
+  reportHistory: { total: number; valid: number; rejected: number };
+};
+
+export type StatusAuditEntry = {
+  action: "strike_revoked" | "host_blacklist_removed" | "reporter_blacklist_removed" | "cooldown_cleared";
+  moderatorId: string;
+  relatedId: string | null;
+  createdAt: number;
+};
 
 export class ModerationRepository {
   constructor(private readonly db: Database.Database) {}
 
   isReporterBlacklisted(userId: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM reporter_blacklist WHERE user_id=?").get(userId));
+    return Boolean(this.db.prepare("SELECT 1 FROM reporter_blacklist WHERE user_id=? AND removed_at IS NULL").get(userId));
   }
 
   isHostBlacklisted(userId: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM host_blacklist WHERE user_id=?").get(userId));
+    return Boolean(this.db.prepare("SELECT 1 FROM host_blacklist WHERE user_id=? AND removed_at IS NULL").get(userId));
   }
 
   submitReport(
@@ -155,8 +176,12 @@ export class ModerationRepository {
   }
 
   blacklistReporter(userId: string, moderatorId: string, reason: string | null, now: number): boolean {
-    return this.db.prepare(`INSERT OR IGNORE INTO reporter_blacklist
-      (user_id,blacklisted_at,moderator_id,reason) VALUES (?,?,?,?)`)
+    return this.db.prepare(`INSERT INTO reporter_blacklist
+      (user_id,blacklisted_at,moderator_id,reason,removed_at,removed_by) VALUES (?,?,?,?,NULL,NULL)
+      ON CONFLICT(user_id) DO UPDATE SET
+        blacklisted_at=excluded.blacklisted_at, moderator_id=excluded.moderator_id,
+        reason=excluded.reason, removed_at=NULL, removed_by=NULL
+      WHERE reporter_blacklist.removed_at IS NOT NULL`)
       .run(userId, now, moderatorId, reason).changes === 1;
   }
 
@@ -169,6 +194,98 @@ export class ModerationRepository {
     const row = this.db.prepare("SELECT COUNT(*) AS count FROM host_strikes WHERE host_id=? AND active=1")
       .get(hostId) as { count: number };
     return row.count;
+  }
+
+  getHostModerationStatus(userId: string): HostModerationStatus {
+    const latestStrike = this.db.prepare(`SELECT id, created_at FROM host_strikes
+      WHERE host_id=? ORDER BY created_at DESC, id DESC LIMIT 1`)
+      .get(userId) as { id: string; created_at: number } | undefined;
+    const latestActiveStrike = this.db.prepare(`SELECT id FROM host_strikes
+      WHERE host_id=? AND active=1 ORDER BY created_at DESC, id DESC LIMIT 1`)
+      .get(userId) as { id: string } | undefined;
+    const hostBlacklist = this.db.prepare(`SELECT blacklisted_at, removed_at FROM host_blacklist
+      WHERE user_id=?`).get(userId) as { blacklisted_at: number; removed_at: number | null } | undefined;
+    const reporterBlacklist = this.db.prepare(`SELECT blacklisted_at, removed_at FROM reporter_blacklist
+      WHERE user_id=?`).get(userId) as { blacklisted_at: number; removed_at: number | null } | undefined;
+    return {
+      strikeCount: this.getHostStrikeCount(userId),
+      latestActiveStrikeId: latestActiveStrike?.id ?? null,
+      latestStrikeAt: latestStrike?.created_at ?? null,
+      hostBlacklisted: Boolean(hostBlacklist && hostBlacklist.removed_at === null),
+      hostBlacklistedAt: hostBlacklist?.blacklisted_at ?? null,
+      reporterBlacklisted: Boolean(reporterBlacklist && reporterBlacklist.removed_at === null),
+      reporterBlacklistedAt: reporterBlacklist?.blacklisted_at ?? null,
+      reportHistory: this.reporterHistory(userId)
+    };
+  }
+
+  revokeStrike(userId: string, strikeId: string, moderatorId: string, now: number): boolean {
+    return this.db.transaction(() => {
+      const changed = this.db.prepare(`UPDATE host_strikes
+        SET active=0, revoked_at=?, revoked_by=?
+        WHERE id=? AND host_id=? AND active=1`)
+        .run(now, moderatorId, strikeId, userId);
+      if (changed.changes !== 1) return false;
+      this.insertStatusAudit(userId, "strike_revoked", moderatorId, strikeId, now);
+      if (this.getHostStrikeCount(userId) < 3) {
+        const blacklistRemoved = this.db.prepare(`UPDATE host_blacklist
+          SET removed_at=?, removed_by=?
+          WHERE user_id=? AND removed_at IS NULL AND source='strikes'`)
+          .run(now, moderatorId, userId);
+        if (blacklistRemoved.changes === 1) {
+          this.insertStatusAudit(userId, "host_blacklist_removed", moderatorId, null, now);
+        }
+      }
+      return true;
+    })();
+  }
+
+  removeHostBlacklist(userId: string, moderatorId: string, now: number): boolean {
+    return this.db.transaction(() => {
+      const changed = this.db.prepare(`UPDATE host_blacklist SET removed_at=?, removed_by=?
+        WHERE user_id=? AND removed_at IS NULL`).run(now, moderatorId, userId);
+      if (changed.changes !== 1) return false;
+      this.insertStatusAudit(userId, "host_blacklist_removed", moderatorId, null, now);
+      return true;
+    })();
+  }
+
+  removeReporterBlacklist(userId: string, moderatorId: string, now: number): boolean {
+    return this.db.transaction(() => {
+      const changed = this.db.prepare(`UPDATE reporter_blacklist SET removed_at=?, removed_by=?
+        WHERE user_id=? AND removed_at IS NULL`).run(now, moderatorId, userId);
+      if (changed.changes !== 1) return false;
+      this.insertStatusAudit(userId, "reporter_blacklist_removed", moderatorId, null, now);
+      return true;
+    })();
+  }
+
+  clearHostCooldown(userId: string, moderatorId: string, now: number): boolean {
+    return this.db.transaction(() => {
+      const changed = this.db.prepare("DELETE FROM host_cooldowns WHERE user_id=?").run(userId);
+      if (changed.changes !== 1) return false;
+      this.insertStatusAudit(userId, "cooldown_cleared", moderatorId, null, now);
+      return true;
+    })();
+  }
+
+  listStatusAudit(userId: string): StatusAuditEntry[] {
+    return this.db.prepare(`SELECT action, moderator_id AS moderatorId,
+      related_id AS relatedId, created_at AS createdAt
+      FROM moderation_status_audit WHERE user_id=? ORDER BY created_at, id`)
+      .all(userId) as StatusAuditEntry[];
+  }
+
+  private insertStatusAudit(
+    userId: string,
+    action: StatusAuditEntry["action"],
+    moderatorId: string,
+    relatedId: string | null,
+    now: number
+  ): void {
+    this.db.prepare(`INSERT INTO moderation_status_audit
+      (id,user_id,action,moderator_id,related_id,created_at) VALUES (?,?,?,?,?,?)`)
+      .run(randomUUID(), userId, action, moderatorId, relatedId, now);
   }
 
   resolveCase(sessionId: string, action: "ignore" | "strike", moderatorId: string, now: number): ResolveCaseResult {
@@ -193,16 +310,26 @@ export class ModerationRepository {
           .run(randomUUID(), listing.owner_id, sessionId, moderatorId, now);
       }
       const strikeCount = this.getHostStrikeCount(listing.owner_id);
+      let hostBlacklistedNow = false;
       if (strikeCount >= 3) {
-        this.db.prepare(`INSERT OR IGNORE INTO host_blacklist
-          (user_id,blacklisted_at,triggering_session_id,moderator_id) VALUES (?,?,?,?)`)
+        const blacklisted = this.db.prepare(`INSERT INTO host_blacklist
+          (user_id,blacklisted_at,triggering_session_id,moderator_id,source,removed_at,removed_by)
+          VALUES (?,?,?,?,'strikes',NULL,NULL)
+          ON CONFLICT(user_id) DO UPDATE SET
+            blacklisted_at=excluded.blacklisted_at,
+            triggering_session_id=excluded.triggering_session_id,
+            moderator_id=excluded.moderator_id,
+            source='strikes', removed_at=NULL, removed_by=NULL
+          WHERE host_blacklist.removed_at IS NOT NULL`)
           .run(listing.owner_id, now, sessionId, moderatorId);
+        hostBlacklistedNow = blacklisted.changes === 1;
       }
       return {
         ok: true,
         moderationCase: this.getCase(sessionId)!,
         strikeCount,
-        hostBlacklisted: this.isHostBlacklisted(listing.owner_id)
+        hostBlacklisted: this.isHostBlacklisted(listing.owner_id),
+        hostBlacklistedNow
       };
     })();
   }

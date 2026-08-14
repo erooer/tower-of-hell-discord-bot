@@ -18,6 +18,7 @@ type HostCooldownRow = {
 export interface HostCooldownStore {
   get(userId: string): HostCooldown | null;
   recordSuccessfulCreation(userId: string, listingId: string, createdAt: number): void;
+  clear?(userId: string): boolean;
 }
 
 export class HostCooldownRepository implements HostCooldownStore {
@@ -42,5 +43,9 @@ export class HostCooldownRepository implements HostCooldownStore {
         successful_creation_at = excluded.successful_creation_at
       WHERE excluded.successful_creation_at >= host_cooldowns.successful_creation_at`)
       .run(userId, listingId, createdAt);
+  }
+
+  clear(userId: string): boolean {
+    return this.db.prepare("DELETE FROM host_cooldowns WHERE user_id=?").run(userId).changes === 1;
   }
 }

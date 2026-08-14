@@ -32,8 +32,8 @@ function classifiers(kind: "command" | "select" | "button") {
 }
 
 describe("/hostgrind interactions", () => {
-  it("registers only /hostgrind", () => {
-    expect(liveServerCommands.map((command) => command.name)).toEqual(["hostgrind"]);
+  it("keeps /hostgrind registered without restoring the retired commands", () => {
+    expect(liveServerCommands.map((command) => command.name)).toContain("hostgrind");
     expect(liveServerCommands.map((command) => command.name)).not.toContain("carmine");
     expect(liveServerCommands.map((command) => command.name)).not.toContain("xp");
   });
