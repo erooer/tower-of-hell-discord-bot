@@ -9,38 +9,40 @@ import {
   type MessageCreateOptions,
   type MessageEditOptions
 } from "discord.js";
-import { reportReasonLabel, type CaseSnapshot, type ReporterSummary } from "./model.js";
+import { REPORT_THRESHOLD, reportReasonLabel, type CaseSnapshot, type ReporterSummary } from "./model.js";
 
 function timestamp(ms: number, style: "f" | "R"): string {
   return `<t:${Math.floor(ms / 1_000)}:${style}>`;
 }
 
-export function staffCaseMessage(
-  snapshot: CaseSnapshot,
-  moderatorRoleId: string
-): MessageCreateOptions & MessageEditOptions {
+function staffControls(snapshot: CaseSnapshot): ActionRowBuilder<ButtonBuilder> {
   const { listing, case: moderationCase } = snapshot;
   const resolved = moderationCase.status !== "open";
-  const activity = listing.type === "carmine" ? "🔥 Carmine Hunting" : "⚡ XP Grinding Server";
-  const actionRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setLabel("Join Server").setStyle(ButtonStyle.Link).setURL(listing.url).setDisabled(resolved),
     new ButtonBuilder().setCustomId(`lsmod:view:${listing.id}`).setLabel("View Reporters").setStyle(ButtonStyle.Secondary).setDisabled(resolved),
     new ButtonBuilder().setCustomId(`lsmod:ignore:${listing.id}`).setLabel("Ignore Reports").setStyle(ButtonStyle.Secondary).setDisabled(resolved),
     new ButtonBuilder().setCustomId(`lsmod:strike:${listing.id}`).setLabel("Strike / Remove").setStyle(ButtonStyle.Danger).setDisabled(resolved)
   );
+}
 
+function staffCaseEmbed(snapshot: CaseSnapshot, title: string, openColor: number): EmbedBuilder {
+  const { listing, case: moderationCase } = snapshot;
+  const resolved = moderationCase.status !== "open";
+  const activity = listing.type === "carmine" ? "🔥 Carmine Hunting" : "⚡ XP Grinding Server";
   const status = resolved
     ? moderationCase.status === "struck" ? "Resolved — strike issued" : "Resolved — reports ignored"
     : "Open";
   const embed = new EmbedBuilder()
-    .setColor(resolved ? 0x7f8c8d : 0xe67e22)
-    .setTitle(activity)
+    .setColor(resolved ? 0x7f8c8d : openColor)
+    .setTitle(title)
     .addFields(
+      { name: "Activity", value: activity, inline: true },
       { name: "Host", value: `<@${listing.ownerId}>`, inline: true },
       { name: "Status", value: status, inline: true },
       { name: "Started", value: timestamp(listing.createdAt, "f"), inline: true },
       { name: "Expires", value: timestamp(listing.expiresAt, "R"), inline: true },
-      { name: "Unique Reports", value: String(snapshot.reportCount), inline: true },
+      { name: "Reports", value: `${snapshot.reportCount}/${REPORT_THRESHOLD}`, inline: true },
       { name: "Existing Valid Strikes", value: String(snapshot.hostStrikeCount), inline: true },
       {
         name: "Reasons",
@@ -56,12 +58,28 @@ export function staffCaseMessage(
       value: `By <@${moderationCase.resolvedBy}> at ${timestamp(moderationCase.resolvedAt, "f")}`
     });
   }
+  return embed;
+}
 
+export function staffCaseMessage(snapshot: CaseSnapshot): MessageCreateOptions & MessageEditOptions {
+  return {
+    content: "",
+    allowedMentions: { roles: [], users: [], repliedUser: false },
+    embeds: [staffCaseEmbed(snapshot, "⚠️ Reported Session", 0xe67e22)],
+    components: [staffControls(snapshot)]
+  };
+}
+
+export function urgentCaseMessage(
+  snapshot: CaseSnapshot,
+  moderatorRoleId: string,
+  pingModerators: boolean
+): MessageCreateOptions & MessageEditOptions {
   return {
     content: `<@&${moderatorRoleId}>`,
-    allowedMentions: { roles: [moderatorRoleId], users: [], repliedUser: false },
-    embeds: [embed],
-    components: [actionRow]
+    allowedMentions: { roles: pingModerators ? [moderatorRoleId] : [], users: [], repliedUser: false },
+    embeds: [staffCaseEmbed(snapshot, "🚨 Urgent Report", 0xe74c3c)],
+    components: [staffControls(snapshot)]
   };
 }
 

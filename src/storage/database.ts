@@ -53,6 +53,9 @@ export function openDatabase(path: string): Database.Database {
       session_id TEXT PRIMARY KEY REFERENCES live_server_listings(id),
       staff_channel_id TEXT NOT NULL,
       staff_message_id TEXT,
+      urgent_message_id TEXT,
+      urgent_escalated_at INTEGER,
+      urgent_pinged_at INTEGER,
       escalated_at INTEGER NOT NULL,
       status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'ignored', 'struck')),
       resolved_by TEXT,
@@ -94,6 +97,7 @@ export function openDatabase(path: string): Database.Database {
     );
   `);
   migrateReportReasons(db);
+  migrateModerationCasePanels(db);
   return db;
 }
 
@@ -103,4 +107,26 @@ function migrateReportReasons(db: Database.Database): void {
   );
   if (!columns.has("report_reason")) db.exec("ALTER TABLE live_server_reports ADD COLUMN report_reason TEXT");
   if (!columns.has("additional_details")) db.exec("ALTER TABLE live_server_reports ADD COLUMN additional_details TEXT");
+}
+
+function migrateModerationCasePanels(db: Database.Database): void {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(moderation_cases)").all() as Array<{ name: string }>).map((column) => column.name)
+  );
+  const legacySchema = !columns.has("urgent_message_id")
+    || !columns.has("urgent_escalated_at")
+    || !columns.has("urgent_pinged_at");
+  if (!columns.has("urgent_message_id")) db.exec("ALTER TABLE moderation_cases ADD COLUMN urgent_message_id TEXT");
+  if (!columns.has("urgent_escalated_at")) db.exec("ALTER TABLE moderation_cases ADD COLUMN urgent_escalated_at INTEGER");
+  if (!columns.has("urgent_pinged_at")) db.exec("ALTER TABLE moderation_cases ADD COLUMN urgent_pinged_at INTEGER");
+
+  // Cases created by older versions only existed at the seven-report threshold
+  // and already pinged moderators. Preserve that fact so reconciliation cannot
+  // repeat the role ping after an upgrade.
+  if (legacySchema) {
+    db.exec(`UPDATE moderation_cases
+      SET urgent_escalated_at = COALESCE(urgent_escalated_at, escalated_at),
+          urgent_pinged_at = COALESCE(urgent_pinged_at, escalated_at)
+      WHERE (SELECT COUNT(*) FROM live_server_reports WHERE session_id = moderation_cases.session_id) >= 7`);
+  }
 }

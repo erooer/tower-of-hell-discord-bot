@@ -58,7 +58,7 @@ export function controlMessage(listing: Listing, disabled = !listing.active): Me
       .setDisabled(disabled),
     new ButtonBuilder()
       .setCustomId(`lsv1:end:${listing.id}`)
-      .setLabel("End Server")
+      .setLabel("End Session")
       .setStyle(ButtonStyle.Danger)
       .setDisabled(disabled)
   );

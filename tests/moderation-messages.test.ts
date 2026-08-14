@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Listing } from "../src/live-servers/model.js";
-import { reportersReply, staffCaseMessage } from "../src/moderation/messages.js";
+import { reportersReply, staffCaseMessage, urgentCaseMessage } from "../src/moderation/messages.js";
 import type { CaseSnapshot, ModerationCase } from "../src/moderation/model.js";
 
 const listing: Listing = {
@@ -13,6 +13,8 @@ const listing: Listing = {
 };
 const moderationCase: ModerationCase = {
   sessionId: listing.id, staffChannelId: "staff", staffMessageId: "staff-message",
+  urgentMessageId: "urgent-message", urgentEscalatedAt: 1_800_000_100_000,
+  urgentPingedAt: 1_800_000_100_000,
   escalatedAt: 1_800_000_100_000, status: "open", resolvedBy: null,
   resolvedAt: null, updatedAt: 1_800_000_100_000
 };
@@ -27,15 +29,16 @@ describe("moderation message builders", () => {
         { reason: "wrong_category", count: 1 }
       ]
     };
-    const payload = staffCaseMessage(snapshot, "moderator-role");
+    const payload = staffCaseMessage(snapshot);
     const json = JSON.stringify(payload);
-    expect(payload.content).toBe("<@&moderator-role>");
-    expect(payload.allowedMentions).toEqual({ roles: ["moderator-role"], users: [], repliedUser: false });
+    expect(payload.content).toBe("");
+    expect(payload.allowedMentions).toEqual({ roles: [], users: [], repliedUser: false });
+    expect(json).toContain("⚠️ Reported Session");
     expect(json).toContain("🔥 Carmine Hunting");
     expect(json).toContain("<@host-id>");
     expect(json).toContain("<t:1800000000:f>");
     expect(json).toContain("<t:1800007200:R>");
-    expect(json).toContain('"name":"Unique Reports","value":"7"');
+    expect(json).toContain('"name":"Reports","value":"7/7"');
     expect(json).toContain('"name":"Existing Valid Strikes","value":"2"');
     expect(json).toContain("Host is not in the server — 4");
     expect(json).toContain("Server doesn't exist — 2");
@@ -45,12 +48,29 @@ describe("moderation message builders", () => {
     expect(json).toContain("Strike / Remove");
   });
 
+  it("builds a distinct urgent panel and only enables the role mention for the initial ping", () => {
+    const snapshot: CaseSnapshot = {
+      case: moderationCase, listing, reportCount: 8, hostStrikeCount: 2,
+      reasonCounts: [{ reason: "server_missing", count: 8 }]
+    };
+    const initial = urgentCaseMessage(snapshot, "moderator-role", true);
+    const refresh = urgentCaseMessage(snapshot, "moderator-role", false);
+    expect(initial.content).toBe("<@&moderator-role>");
+    expect(initial.allowedMentions).toEqual({ roles: ["moderator-role"], users: [], repliedUser: false });
+    expect(JSON.stringify(initial)).toContain("🚨 Urgent Report");
+    expect(JSON.stringify(initial)).toContain('"name":"Reports","value":"8/7"');
+    expect(JSON.stringify(initial)).toContain(`Session ${listing.id}`);
+    expect(refresh.content).toBe("<@&moderator-role>");
+    expect(refresh.allowedMentions).toEqual({ roles: [], users: [], repliedUser: false });
+  });
+
   it("disables staff controls after resolution", () => {
-    const payload = staffCaseMessage({
+    const snapshot = {
       case: { ...moderationCase, status: "ignored", resolvedBy: "moderator", resolvedAt: 1_800_000_200_000 },
       listing, reportCount: 8, hostStrikeCount: 0, reasonCounts: [{ reason: null, count: 8 }]
-    }, "moderator-role");
-    expect(JSON.stringify(payload.components).match(/"disabled":true/g)).toHaveLength(4);
+    } satisfies CaseSnapshot;
+    expect(JSON.stringify(staffCaseMessage(snapshot).components).match(/"disabled":true/g)).toHaveLength(4);
+    expect(JSON.stringify(urgentCaseMessage(snapshot, "moderator-role", false).components).match(/"disabled":true/g)).toHaveLength(4);
   });
 
   it("builds an ephemeral-compatible reporter history and blacklist selector", () => {

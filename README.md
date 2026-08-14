@@ -82,7 +82,7 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 - Transient Discord deletion/edit failures are logged; pending cleanup is retried every expiration sweep.
 - Each live announcement has a public Report button. It opens a modal with a required reason (`host_not_in_server`, `server_missing`, `wrong_category`, or `other`) and optional details. `Other` requires details. Opening or cancelling the modal does not count; only a validated submission is stored.
 - Report records retain the stable reason ID and up to 300 characters of optional detail. Existing databases are migrated automatically with nullable columns, so older reasonless reports remain valid history.
-- Seven unique reports create exactly one persistent staff case and ping `MODERATOR_ROLE_ID`. Later reports update that same message.
+- The first unique report creates one quiet persistent **Reported Session** panel in the staff channel. At seven reports, the same case gains one separate **Urgent Report** message and pings `MODERATOR_ROLE_ID` exactly once; later reports refresh both existing messages without another ping.
 - Staff cases show aggregated reason totals. Staff can inspect each reporter's reason, details, and history; blacklist troll reporters; ignore reports; or strike/remove the server. Ignored reports become rejected history; struck reports become valid history.
 - One struck session can create only one host strike. At three active strikes, the host is persistently blocked from creating new listings.
 - Reports, outcomes, cases, blacklists, and strike history share the SQLite database and are reconciled without duplicate case messages after restart.
@@ -111,7 +111,7 @@ Use a test server or temporary roles/channels before production.
 7. **Ownership:** As a different user, trigger a copied button custom ID or interact with the visible panel; verify the ephemeral ownership rejection and unchanged record.
 8. **Early extension:** Press **Extend +1h** with more than ten minutes remaining; verify rejection.
 9. **Eligible extension:** For a practical test, create a listing and adjust its `expires_at` in a disposable database to 5–10 minutes ahead. Press **Extend +1h** and verify exactly 3,600,000 ms is added to the old expiration, both messages update, and an immediate second click is rejected.
-10. **Manual end:** Press **End Server**; verify immediate deletion from `#live-servers`, disabled controls, ephemeral confirmation, and no extra live-channel message.
+10. **Manual end:** Press **End Session**; verify immediate deletion from `#live-servers`, disabled controls, ephemeral confirmation, and no extra live-channel message.
 11. **Automatic expiration:** In a disposable database, set an active record's `expires_at` to the near future. Verify the bot deletes the live message and disables controls after the configured poll interval without posting an expiration notice.
 12. **Restart persistence:** Create a listing, stop and restart the bot, and verify it remains manageable with the same expiration. Then stop the bot, set/wait for expiration, restart, and verify immediate cleanup.
 13. **Manual deletion/API recovery:** Delete a live message manually and verify its panel becomes disabled. Temporarily remove a required permission during cleanup, verify the error is logged, restore permission, and verify a later sweep completes cleanup.

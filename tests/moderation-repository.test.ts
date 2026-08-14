@@ -51,10 +51,16 @@ describe("ModerationRepository", () => {
     const session = listing();
     for (let index = 1; index <= 6; index += 1) {
       expect(moderation.submitReport(session, `user-${index}`, "staff", now + index))
-        .toMatchObject({ ok: true, count: index, escalatedNow: false, moderationCase: null });
+        .toMatchObject({
+          ok: true, count: index, escalatedNow: false,
+          moderationCase: { sessionId: session.id, urgentEscalatedAt: null }
+        });
     }
     expect(moderation.submitReport(session, "user-7", "staff", now + 7))
-      .toMatchObject({ ok: true, count: 7, escalatedNow: true, moderationCase: { status: "open" } });
+      .toMatchObject({
+        ok: true, count: 7, escalatedNow: true,
+        moderationCase: { status: "open", urgentEscalatedAt: now + 7 }
+      });
     expect(moderation.submitReport(session, "user-8", "staff", now + 8))
       .toMatchObject({ ok: true, count: 8, escalatedNow: false, moderationCase: { status: "open" } });
     expect(moderation.listCases()).toHaveLength(1);
@@ -128,6 +134,8 @@ describe("ModerationRepository", () => {
       const session = listing("persistent-host");
       escalate(session);
       moderation.setCaseMessage(session.id, "staff-message", now + 10);
+      expect(moderation.claimUrgentPing(session.id, now + 11)).toBe(true);
+      moderation.setUrgentMessage(session.id, "urgent-message", now + 12);
       moderation.resolveCase(session.id, "strike", "moderator", now + 20);
       moderation.blacklistReporter("troll", "moderator", null, now + 30);
       database.close();
@@ -138,7 +146,9 @@ describe("ModerationRepository", () => {
       expect(moderation.getHostStrikeCount("persistent-host")).toBe(1);
       expect(moderation.getReportCount(session.id)).toBe(7);
       expect(moderation.getCase(session.id)).toMatchObject({
-        staffMessageId: "staff-message", status: "struck", resolvedBy: "moderator"
+        staffMessageId: "staff-message", urgentMessageId: "urgent-message",
+        urgentEscalatedAt: expect.any(Number), urgentPingedAt: now + 11,
+        status: "struck", resolvedBy: "moderator"
       });
     } finally {
       if (database.open) database.close();

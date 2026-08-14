@@ -26,6 +26,9 @@ export type ModerationCase = {
   sessionId: string;
   staffChannelId: string;
   staffMessageId: string | null;
+  urgentMessageId: string | null;
+  urgentEscalatedAt: number | null;
+  urgentPingedAt: number | null;
   escalatedAt: number;
   status: CaseStatus;
   resolvedBy: string | null;

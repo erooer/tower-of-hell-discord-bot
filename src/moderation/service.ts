@@ -2,7 +2,7 @@ import { Client, DiscordAPIError, type GuildTextBasedChannel, type Message } fro
 import type { Config } from "../config.js";
 import { KeyedMutex } from "../live-servers/keyed-mutex.js";
 import type { LiveServerService } from "../live-servers/service.js";
-import { reportersReply, staffCaseMessage } from "./messages.js";
+import { reportersReply, staffCaseMessage, urgentCaseMessage } from "./messages.js";
 import type { CaseSnapshot, ReporterSummary, StaffActor } from "./model.js";
 import type { ListingRepository } from "../storage/listing-repository.js";
 import type { ModerationRepository } from "../storage/moderation-repository.js";
@@ -82,7 +82,7 @@ export class ModerationService {
         console.error("Failed to update the public report counter; restart reconciliation will retry", sessionId, error);
       });
       if (result.moderationCase) {
-        await this.syncCaseMessage(sessionId).catch((error) => {
+        await this.syncCaseMessages(sessionId).catch((error) => {
           console.error("Failed to publish/update moderation case; restart reconciliation will retry", sessionId, error);
         });
       }
@@ -128,7 +128,7 @@ export class ModerationService {
           : { ok: false, message: "That moderation case does not exist." };
       }
       if (action === "strike") await this.liveServers.moderationEnd(sessionId);
-      await this.syncCaseMessage(sessionId).catch((error) => console.error("Failed to update resolved moderation case", sessionId, error));
+      await this.syncCaseMessages(sessionId).catch((error) => console.error("Failed to update resolved moderation case", sessionId, error));
       if (action === "ignore") return { ok: true, message: "Reports ignored and recorded as rejected." };
       return {
         ok: true,
@@ -142,7 +142,7 @@ export class ModerationService {
   async reconcileCases(): Promise<void> {
     for (const moderationCase of this.moderation.listCases()) {
       try {
-        await this.syncCaseMessage(moderationCase.sessionId);
+        await this.syncCaseMessages(moderationCase.sessionId);
       } catch (error) {
         console.error("Failed to reconcile moderation case", moderationCase.sessionId, error);
       }
@@ -151,7 +151,7 @@ export class ModerationService {
 
   async refreshCase(sessionId: string): Promise<void> {
     if (!this.moderation.getCase(sessionId)) return;
-    await this.syncCaseMessage(sessionId).catch((error) => {
+    await this.syncCaseMessages(sessionId).catch((error) => {
       console.error("Failed to refresh moderation case", sessionId, error);
     });
   }
@@ -182,11 +182,18 @@ export class ModerationService {
     return channel;
   }
 
-  private async syncCaseMessage(sessionId: string): Promise<void> {
+  private async syncCaseMessages(sessionId: string): Promise<void> {
     const snapshot = this.snapshot(sessionId);
     if (!snapshot) return;
     const channel = await this.textChannel(snapshot.case.staffChannelId);
-    const payload = staffCaseMessage(snapshot, this.config.moderatorRoleId);
+    await this.syncNormalPanel(snapshot, channel);
+    const refreshed = this.snapshot(sessionId);
+    if (refreshed?.case.urgentEscalatedAt) await this.syncUrgentPanel(refreshed, channel);
+  }
+
+  private async syncNormalPanel(snapshot: CaseSnapshot, channel: GuildTextBasedChannel): Promise<void> {
+    const sessionId = snapshot.case.sessionId;
+    const payload = staffCaseMessage(snapshot);
     if (snapshot.case.staffMessageId) {
       try {
         const message = await channel.messages.fetch(snapshot.case.staffMessageId);
@@ -199,5 +206,24 @@ export class ModerationService {
     }
     const message: Message = await channel.send(payload);
     this.moderation.setCaseMessage(sessionId, message.id, this.now());
+  }
+
+  private async syncUrgentPanel(snapshot: CaseSnapshot, channel: GuildTextBasedChannel): Promise<void> {
+    const sessionId = snapshot.case.sessionId;
+    if (snapshot.case.urgentMessageId) {
+      try {
+        const message = await channel.messages.fetch(snapshot.case.urgentMessageId);
+        await message.edit(urgentCaseMessage(snapshot, this.config.moderatorRoleId, false));
+        return;
+      } catch (error) {
+        if (!isUnknownMessage(error)) throw error;
+        this.moderation.setUrgentMessage(sessionId, null, this.now());
+      }
+    }
+
+    const pingModerators = this.moderation.claimUrgentPing(sessionId, this.now());
+    const current = this.snapshot(sessionId) ?? snapshot;
+    const message: Message = await channel.send(urgentCaseMessage(current, this.config.moderatorRoleId, pingModerators));
+    this.moderation.setUrgentMessage(sessionId, message.id, this.now());
   }
 }

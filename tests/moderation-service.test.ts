@@ -47,7 +47,9 @@ describe("ModerationService", () => {
     });
     edit = vi.fn(async (_payload: unknown) => undefined);
     fetchMessage = vi.fn(async (_id: string) => ({ edit }));
-    send = vi.fn(async (_payload: unknown) => ({ id: "staff-message" }));
+    send = vi.fn(async (payload: unknown) => ({
+      id: JSON.stringify(payload).includes("Urgent Report") ? "urgent-message" : "staff-message"
+    }));
     const channel = { isTextBased: () => true, isDMBased: () => false, send, messages: { fetch: fetchMessage } };
     client = { channels: { fetch: vi.fn(async () => channel) } } as unknown as Client;
     moderationEnd = vi.fn(async () => listing);
@@ -114,33 +116,49 @@ describe("ModerationService", () => {
 
     const publicPayloads = edit.mock.calls
       .map((call) => JSON.stringify(call[0]))
-      .filter((payload) => payload.includes('"name":"Reports"'));
+      .filter((payload) => payload.includes('"title":"⚡ XP Grinding Server"'));
     expect(publicPayloads).toHaveLength(8);
     expect(publicPayloads[0]).toContain('"value":"⚠️ 1/7"');
     expect(publicPayloads[5]).toContain('"value":"⚠️ 6/7"');
     expect(publicPayloads[6]).toContain('"value":"⚠️ 7/7"');
     expect(publicPayloads[7]).toContain('"value":"⚠️ 8/7"');
-    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
-  it("posts one staff case at report seven and report eight only edits it", async () => {
+  it("creates one quiet normal panel at report one and one pinging urgent panel at report seven", async () => {
     for (let index = 1; index <= 6; index += 1) {
       await service.report(listing.id, `reporter-${index}`, "guild", "server_missing", "");
     }
-    expect(send).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]?.[0]).toMatchObject({
+      content: "",
+      allowedMentions: { roles: [], users: [], repliedUser: false }
+    });
+    expect(JSON.stringify(send.mock.calls[0]?.[0])).toContain("⚠️ Reported Session");
+    expect(JSON.stringify(edit.mock.calls.at(-1)?.[0])).toContain('"value":"6/7"');
 
     await service.report(listing.id, "reporter-7", "guild", "host_not_in_server", "");
-    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(2);
     expect(repository.getCase(listing.id)?.staffMessageId).toBe("staff-message");
-    expect(JSON.stringify(send.mock.calls[0]?.[0])).toContain("Server doesn't exist — 6");
-    expect(JSON.stringify(send.mock.calls[0]?.[0])).toContain("Host is not in the server — 1");
+    expect(repository.getCase(listing.id)?.urgentMessageId).toBe("urgent-message");
+    expect(JSON.stringify(send.mock.calls[1]?.[0])).toContain("🚨 Urgent Report");
+    expect(send.mock.calls[1]?.[0]).toMatchObject({
+      content: "<@&moderator-role>",
+      allowedMentions: { roles: ["moderator-role"], users: [], repliedUser: false }
+    });
+    expect(JSON.stringify(send.mock.calls[1]?.[0])).toContain("Server doesn't exist — 6");
+    expect(JSON.stringify(send.mock.calls[1]?.[0])).toContain("Host is not in the server — 1");
+    expect(edit.mock.calls.map((call) => JSON.stringify(call[0])).some((payload) =>
+      payload.includes("Reported Session") && payload.includes('"value":"7/7"')
+    )).toBe(true);
 
     await service.report(listing.id, "reporter-8", "guild", "wrong_category", "");
-    expect(send).toHaveBeenCalledOnce();
-    expect(fetchMessage).toHaveBeenCalledWith("staff-message");
-    expect(edit).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(fetchMessage).toHaveBeenCalledWith("urgent-message");
     expect(repository.getReportCount(listing.id)).toBe(8);
-    expect(JSON.stringify(edit.mock.calls[0]?.[0])).toContain("Incorrect category of grind — 1");
+    const urgentRefresh = edit.mock.calls.map((call) => JSON.stringify(call[0])).find((payload) => payload.includes("Urgent Report") && payload.includes('"value":"8/7"'));
+    expect(urgentRefresh).toContain("Incorrect category of grind — 1");
+    expect(urgentRefresh).toContain('"roles":[]');
   });
 
   it("returns duplicate and blacklist messages without changing the count", async () => {
@@ -186,15 +204,29 @@ describe("ModerationService", () => {
     expect(moderationEnd).not.toHaveBeenCalled();
   });
 
-  it("ignore and strike update histories, disable controls, and cannot resolve twice", async () => {
+  it("strike updates history and disables both staff panels", async () => {
     await reportSeven();
+    edit.mockClear();
     expect((await service.resolve(listing.id, "strike", authorized)).ok).toBe(true);
     expect(repository.reporterHistory("reporter-1")).toEqual({ total: 1, valid: 1, rejected: 0 });
     expect(repository.getHostStrikeCount("host")).toBe(1);
     expect(moderationEnd).toHaveBeenCalledOnce();
-    expect(JSON.stringify(edit.mock.calls.at(-1)?.[0])).toContain('"disabled":true');
+    const resolvedPanels = edit.mock.calls.map((call) => JSON.stringify(call[0]));
+    expect(resolvedPanels.some((payload) => payload.includes("Reported Session") && payload.includes('"disabled":true'))).toBe(true);
+    expect(resolvedPanels.some((payload) => payload.includes("Urgent Report") && payload.includes('"disabled":true'))).toBe(true);
     expect((await service.resolve(listing.id, "ignore", authorized)).message).toBe("This moderation case has already been resolved.");
     expect(repository.getHostStrikeCount("host")).toBe(1);
+  });
+
+  it("Ignore Reports resolves and disables both staff panels", async () => {
+    await reportSeven();
+    edit.mockClear();
+    expect((await service.resolve(listing.id, "ignore", authorized)).ok).toBe(true);
+    const resolvedPanels = edit.mock.calls.map((call) => JSON.stringify(call[0]));
+    expect(resolvedPanels.some((payload) => payload.includes("Reported Session") && payload.includes('"disabled":true'))).toBe(true);
+    expect(resolvedPanels.some((payload) => payload.includes("Urgent Report") && payload.includes('"disabled":true'))).toBe(true);
+    expect(repository.reporterHistory("reporter-1")).toEqual({ total: 1, valid: 0, rejected: 1 });
+    expect(moderationEnd).not.toHaveBeenCalled();
   });
 
   it("restart reconciliation edits an existing case and never duplicates the staff message", async () => {
@@ -204,7 +236,13 @@ describe("ModerationService", () => {
     await service.reconcileCases();
     expect(send).not.toHaveBeenCalled();
     expect(fetchMessage).toHaveBeenCalledWith("staff-message");
-    expect(edit).toHaveBeenCalledOnce();
+    expect(fetchMessage).toHaveBeenCalledWith("urgent-message");
+    expect(edit).toHaveBeenCalledTimes(2);
+    expect(repository.getCase(listing.id)).toMatchObject({
+      staffMessageId: "staff-message", urgentMessageId: "urgent-message"
+    });
+    const urgentRefresh = edit.mock.calls.map((call) => JSON.stringify(call[0])).find((payload) => payload.includes("Urgent Report"));
+    expect(urgentRefresh).toContain('"roles":[]');
   });
 
   it("keeps reporting controls and case state intact through Change Link and extension edits", async () => {
@@ -222,6 +260,9 @@ describe("ModerationService", () => {
     const liveService = new LiveServerService(client, listings, config, actionNow, verifier, repository);
     const integratedModeration = new ModerationService(client, listings, repository, liveService, config, actionNow);
 
+    edit.mockClear();
+    fetchMessage.mockClear();
+
     expect((await liveService.changeUrl(listing.id, "host", replacementUrl)).ok).toBe(true);
     await integratedModeration.refreshCase(listing.id);
     const beforeExtension = listings.get(listing.id)!;
@@ -236,7 +277,7 @@ describe("ModerationService", () => {
     const editedPayloads = edit.mock.calls.map((call) => JSON.stringify(call[0]));
     expect(editedPayloads.some((payload) => payload.includes(`lsreport:submit:${listing.id}`))).toBe(true);
     expect(editedPayloads.some((payload) => payload.includes(replacementUrl))).toBe(true);
-    const publicPayloads = editedPayloads.filter((payload) => payload.includes('"name":"Reports"'));
+    const publicPayloads = editedPayloads.filter((payload) => payload.includes('"value":"⚠️ 7/7"'));
     expect(publicPayloads).toHaveLength(2);
     expect(publicPayloads.every((payload) => payload.includes('"value":"⚠️ 7/7"'))).toBe(true);
   });

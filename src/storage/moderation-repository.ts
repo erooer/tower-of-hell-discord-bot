@@ -12,6 +12,7 @@ import {
 
 type CaseRow = {
   session_id: string; staff_channel_id: string; staff_message_id: string | null;
+  urgent_message_id: string | null; urgent_escalated_at: number | null; urgent_pinged_at: number | null;
   escalated_at: number; status: CaseStatus; resolved_by: string | null;
   resolved_at: number | null; updated_at: number;
 };
@@ -21,6 +22,9 @@ function mapCase(row: CaseRow): ModerationCase {
     sessionId: row.session_id,
     staffChannelId: row.staff_channel_id,
     staffMessageId: row.staff_message_id,
+    urgentMessageId: row.urgent_message_id,
+    urgentEscalatedAt: row.urgent_escalated_at,
+    urgentPingedAt: row.urgent_pinged_at,
     escalatedAt: row.escalated_at,
     status: row.status,
     resolvedBy: row.resolved_by,
@@ -69,13 +73,19 @@ export class ModerationRepository {
         .run(listing.id, reporterId, listing.ownerId, now, reason, details, outcome, decidedAt);
       if (inserted.changes !== 1) return { ok: false, reason: "duplicate" };
 
+      this.db.prepare(`INSERT OR IGNORE INTO moderation_cases
+        (session_id,staff_channel_id,escalated_at,status,updated_at) VALUES (?, ?, ?, 'open', ?)`)
+        .run(listing.id, staffChannelId, now, now);
+
       const count = this.getReportCount(listing.id);
       let escalatedNow = false;
-      if (count >= REPORT_THRESHOLD) {
-        const created = this.db.prepare(`INSERT OR IGNORE INTO moderation_cases
-          (session_id,staff_channel_id,escalated_at,status,updated_at) VALUES (?, ?, ?, 'open', ?)`)
-          .run(listing.id, staffChannelId, now, now);
-        escalatedNow = created.changes === 1;
+      const moderationCase = this.getCase(listing.id)!;
+      if (count >= REPORT_THRESHOLD && moderationCase.status === "open") {
+        const escalated = this.db.prepare(`UPDATE moderation_cases
+          SET urgent_escalated_at=?, updated_at=?
+          WHERE session_id=? AND urgent_escalated_at IS NULL`)
+          .run(now, now, listing.id);
+        escalatedNow = escalated.changes === 1;
       }
       return { ok: true, count, escalatedNow, moderationCase: this.getCase(listing.id) };
     })();
@@ -99,6 +109,17 @@ export class ModerationRepository {
   setCaseMessage(sessionId: string, messageId: string | null, now: number): void {
     this.db.prepare("UPDATE moderation_cases SET staff_message_id=?, updated_at=? WHERE session_id=?")
       .run(messageId, now, sessionId);
+  }
+
+  setUrgentMessage(sessionId: string, messageId: string | null, now: number): void {
+    this.db.prepare("UPDATE moderation_cases SET urgent_message_id=?, updated_at=? WHERE session_id=?")
+      .run(messageId, now, sessionId);
+  }
+
+  claimUrgentPing(sessionId: string, now: number): boolean {
+    return this.db.prepare(`UPDATE moderation_cases SET urgent_pinged_at=?, updated_at=?
+      WHERE session_id=? AND urgent_escalated_at IS NOT NULL AND urgent_pinged_at IS NULL`)
+      .run(now, now, sessionId).changes === 1;
   }
 
   getReporterSummaries(sessionId: string): ReporterSummary[] {
