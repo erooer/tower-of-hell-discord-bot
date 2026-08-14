@@ -9,25 +9,32 @@ import {
 import type { Listing } from "./model.js";
 import { typeLabel } from "./model.js";
 
-function discordTimestamp(ms: number): string {
-  return `<t:${Math.floor(ms / 1_000)}:R>`;
+function discordTimestamp(ms: number, style: "t" | "R"): string {
+  return `<t:${Math.floor(ms / 1_000)}:${style}>`;
 }
 
 export function liveMessage(listing: Listing, roleId: string): MessageCreateOptions & MessageEditOptions {
-  const label = typeLabel(listing.type);
+  const title = listing.type === "carmine" ? "🔥 Carmine Hunting" : "⚡ XP Grinding Server";
+  const joinRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setLabel("Join Server")
+      .setStyle(ButtonStyle.Link)
+      .setURL(listing.url)
+  );
   return {
     content: `<@&${roleId}>`,
     allowedMentions: { roles: [roleId], users: [], repliedUser: false },
     embeds: [
       new EmbedBuilder()
         .setColor(listing.type === "carmine" ? 0xb51f42 : 0x35a7ff)
-        .setDescription(
-          `**<@${listing.ownerId}> has started ${label} at:**\n\n` +
-          `[Join the Roblox private server](${listing.url})\n\n` +
-          `**Expires:** ${discordTimestamp(listing.expiresAt)}`
+        .setTitle(title)
+        .addFields(
+          { name: "Host", value: `<@${listing.ownerId}>`, inline: true },
+          { name: "Started", value: discordTimestamp(listing.createdAt, "t"), inline: true },
+          { name: "Expires", value: discordTimestamp(listing.expiresAt, "R"), inline: false }
         )
     ],
-    components: []
+    components: [joinRow]
   };
 }
 
@@ -59,7 +66,7 @@ export function controlMessage(listing: Listing, disabled = !listing.active): Me
         .setTitle(`${typeLabel(listing.type)} Server`)
         .setDescription(
           `**Status:** ${status}\n` +
-          `**Expires:** ${discordTimestamp(listing.expiresAt)}\n` +
+          `**Expires:** ${discordTimestamp(listing.expiresAt, "R")}\n` +
           `**Extension:** 🔒 Available during the final 10 minutes`
         )
         .setFooter({ text: `Listing ${listing.id}` })

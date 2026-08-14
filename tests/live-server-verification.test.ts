@@ -3,6 +3,7 @@ import type { Client } from "discord.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
 import { LiveServerService } from "../src/live-servers/service.js";
+import { liveMessage } from "../src/live-servers/messages.js";
 import type { PrivateServerVerifier, RobloxVerificationResult } from "../src/roblox/private-server-verifier.js";
 import { openDatabase } from "../src/storage/database.js";
 import { ListingRepository } from "../src/storage/listing-repository.js";
@@ -98,5 +99,38 @@ describe("LiveServerService verification boundary", () => {
     expect(unchanged.expiresAt).toBe(listing.expiresAt);
     expect(unchanged.active).toBe(true);
     expect(fetchChannel).not.toHaveBeenCalled();
+  });
+
+  it("restores the canonical public message and Join Server button during restart reconciliation", async () => {
+    const listing = repository.create({
+      guildId: "guild", ownerId: "owner", type: "xp", url: oldUrl,
+      liveChannelId: "live", liveMessageId: "live-message", controlChannelId: "controls",
+      controlMessageId: "control-message", createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000
+    });
+    const edit = vi.fn(async (_payload: unknown) => undefined);
+    const fetchMessage = vi.fn(async (_id: string) => ({ edit }));
+    const channel = {
+      isTextBased: () => true,
+      isDMBased: () => false,
+      messages: { fetch: fetchMessage }
+    };
+    const client = { channels: { fetch: vi.fn(async () => channel) } } as unknown as Client;
+    const verifier: PrivateServerVerifier = {
+      verify: vi.fn(async () => ({ valid: false as const, reason: "unresolved" as const }))
+    };
+    const service = new LiveServerService(client, repository, config, () => 1_800_000_100_000, verifier);
+
+    await service.reconcileActive();
+
+    expect(fetchMessage).toHaveBeenCalledWith(listing.liveMessageId);
+    expect(edit).toHaveBeenCalledOnce();
+    const recoveredPayload = edit.mock.calls[0]?.[0];
+    expect(JSON.stringify(recoveredPayload)).toBe(JSON.stringify(liveMessage(listing, config.xpRoleId)));
+    expect(JSON.stringify(recoveredPayload)).toContain('"title":"⚡ XP Grinding Server"');
+    expect(JSON.stringify(recoveredPayload)).toContain('"value":"<@owner>"');
+    expect(JSON.stringify(recoveredPayload)).toContain('"value":"<t:1800000000:t>"');
+    expect(JSON.stringify(recoveredPayload)).toContain('"value":"<t:1800007200:R>"');
+    expect(JSON.stringify(recoveredPayload)).toContain('"label":"Join Server"');
+    expect(JSON.stringify(recoveredPayload)).toContain(oldUrl);
   });
 });

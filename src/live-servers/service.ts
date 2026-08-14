@@ -182,7 +182,10 @@ export class LiveServerService {
       }
       try {
         const channel = await this.textChannel(listing.liveChannelId);
-        await channel.messages.fetch(listing.liveMessageId);
+        const message = await channel.messages.fetch(listing.liveMessageId);
+        // Reapply the canonical payload after a restart. This repairs partial or
+        // pre-upgrade messages and guarantees the Join Server button is present.
+        await message.edit(liveMessage(listing, this.roleId(listing.type)));
       } catch (error) {
         if (isUnknownMessage(error)) await this.failListing(listing.id, "live_message_deleted");
         else console.error("Could not reconcile listing", listing.id, error);
