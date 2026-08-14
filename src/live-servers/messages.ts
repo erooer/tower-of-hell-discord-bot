@@ -17,9 +17,9 @@ export function liveMessage(listing: Listing, roleId: string): MessageCreateOpti
   const title = listing.type === "carmine" ? "🔥 Carmine Hunting" : "⚡ XP Grinding Server";
   const joinRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
+      .setCustomId(`lsjoin:open:${listing.id}`)
       .setLabel("Join Server")
-      .setStyle(ButtonStyle.Link)
-      .setURL(listing.url),
+      .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId(`lsreport:submit:${listing.id}`)
       .setLabel("Report")

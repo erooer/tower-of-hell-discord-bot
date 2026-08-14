@@ -7,16 +7,26 @@ import { openDatabase } from "./storage/database.js";
 import { ListingRepository } from "./storage/listing-repository.js";
 import { ModerationRepository } from "./storage/moderation-repository.js";
 import { ModerationService } from "./moderation/service.js";
+import { HostCooldownRepository } from "./storage/host-cooldown-repository.js";
 
 const config = loadConfig();
 const database = openDatabase(config.databasePath);
 const repository = new ListingRepository(database);
 const moderationRepository = new ModerationRepository(database);
+const hostCooldownRepository = new HostCooldownRepository(database);
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
   partials: [Partials.Channel, Partials.Message]
 });
-const service = new LiveServerService(client, repository, config, Date.now, undefined, moderationRepository);
+const service = new LiveServerService(
+  client,
+  repository,
+  config,
+  Date.now,
+  undefined,
+  moderationRepository,
+  hostCooldownRepository
+);
 const moderation = new ModerationService(client, repository, moderationRepository, service, config);
 const scheduler = new ExpirationScheduler(service, config.expirationPollMs);
 

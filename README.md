@@ -1,6 +1,6 @@
 # Tower of Hell Live Server Bot
 
-Live Server V1 automates Carmine Hunt and XP Grinding private-server listings. Owners use `/carmine` or `/xp` in the private command channel; the bot publishes a minimal, role-pinging listing in the live channel and posts an owner-only control panel back in the command channel.
+Live Server V1 automates Carmine Hunt and XP Grinding private-server listings. Owners use `/hostgrind` in the private command channel, choose a grind type, and submit their private-server link. The bot publishes a minimal, role-pinging listing in the live channel and posts an owner-only control panel back in the command channel.
 
 The SQLite database is the source of truth. Every listing stores its Discord message IDs and absolute expiration time. On startup the bot reconciles active records, removes anything that expired while offline, detects missing live messages, and resumes a periodic expiration sweep. Failed Discord cleanup is retained and retried rather than silently abandoned.
 
@@ -25,8 +25,8 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
 
    - `LIVE_SERVERS_CHANNEL_ID`: ID of `#live-servers`
    - `SERVER_COMMANDS_CHANNEL_ID`: ID of `#server-bot-cmds`
-   - `CARMINE_ROLE_ID`: role pinged by `/carmine`
-   - `XP_ROLE_ID`: role pinged by `/xp`
+   - `CARMINE_ROLE_ID`: role pinged for Carmine Hunting
+   - `XP_ROLE_ID`: role pinged for XP Grinding
    - `STAFF_REPORTS_CHANNEL_ID`: staff-only channel receiving escalated report cases
    - `MODERATOR_ROLE_ID`: role pinged on escalation and required for all moderation controls
    - `DISCORD_GUILD_ID`: server ID
@@ -74,6 +74,8 @@ Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point
 - Owners can extend by exactly one hour only in the final ten minutes. The hour is added to the stored expiration, never to the click time. A transaction plus per-listing lock prevents double-click stacking.
 - The creator's Discord user ID is checked on every button and change-link modal submission. UI visibility is not trusted.
 - One active listing per owner per server type is enforced by both application logic and a partial unique database index.
+- A successful publication starts a persistent three-hour cooldown for that Discord user across both grind types. Opening `/hostgrind`, selecting a type, failed publication, link changes, extensions, reports, and moderation do not move the cooldown.
+- Public announcements use a blue **Join Server** interaction button. It reads the listing's latest verified URL from SQLite when clicked, so Change Link and restart reconciliation cannot leave a stale destination.
 - Changing a link edits the original live message without pinging again or changing expiration.
 - Ending or expiration deletes the live message and disables the control panel. Nothing is posted to the live channel afterward.
 - If the live message is manually deleted, the record is ended and its control panel is disabled.
@@ -100,9 +102,9 @@ The unit tests cover URL safety, duplicate constraints, exact extension arithmet
 
 Use a test server or temporary roles/channels before production.
 
-1. **Carmine:** Run `/carmine` in `#server-bot-cmds`, submit a valid Roblox private-server URL, and verify one Carmine role ping, the minimal live embed, a two-hour relative expiration, and a control panel.
-2. **XP:** Repeat with `/xp`; verify the XP role and wording. Confirm the same owner may have one Carmine and one XP listing simultaneously.
-3. **Channel restriction:** Try either command in another channel; verify an ephemeral rejection and no listing.
+1. **Carmine:** Run `/hostgrind` in `#server-bot-cmds`, choose Carmine Hunting, submit a valid Roblox private-server URL, and verify one Carmine role ping, the minimal live embed, a two-hour relative expiration, and a control panel.
+2. **XP:** Repeat with `/hostgrind` and choose XP Grinding; verify the XP role and wording. Confirm the three-hour per-user cooldown applies across both grind types.
+3. **Channel restriction:** Try `/hostgrind` in another channel; verify an ephemeral rejection and no listing.
 4. **Invalid/wrong-game URL:** Submit a non-Roblox, HTTP, Roblox URL without a private-server code, or a valid private-server URL for another Place ID; verify private rejection and no listing or role ping. Test both direct game URLs and modern `/share` links.
 5. **Duplicate:** Run the same command again while its listing is active; verify no second live message or ping.
 6. **Change link:** Press **Change Link**, submit another valid URL, and verify the existing live message changes while its message ID and expiration stay the same and no role is repinged.

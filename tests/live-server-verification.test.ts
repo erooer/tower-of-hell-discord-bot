@@ -7,6 +7,7 @@ import { liveMessage } from "../src/live-servers/messages.js";
 import type { PrivateServerVerifier, RobloxVerificationResult } from "../src/roblox/private-server-verifier.js";
 import { openDatabase } from "../src/storage/database.js";
 import { ListingRepository } from "../src/storage/listing-repository.js";
+import { HostCooldownRepository, HOST_COOLDOWN_MS } from "../src/storage/host-cooldown-repository.js";
 
 const oldUrl = "https://www.roblox.com/games/1962086868/Tower-of-Hell?privateServerLinkCode=OldCode12345";
 const newUrl = "https://www.roblox.com/share?code=NewCode12345&type=Server";
@@ -79,6 +80,100 @@ describe("LiveServerService verification boundary", () => {
     expect(controlSend).toHaveBeenCalledOnce();
   });
 
+  it("starts a cross-type cooldown only after successful publication and permits hosting at three hours", async () => {
+    let currentTime = 1_800_000_000_000;
+    const verifier: PrivateServerVerifier = {
+      verify: vi.fn(async (url: string) => ({
+        valid: true as const, originalUrl: url,
+        resolvedUrl: "https://www.roblox.com/games/1962086868/Tower-of-Hell?privateServerLinkCode=Code",
+        placeId: "1962086868" as const
+      }))
+    };
+    const message = { edit: vi.fn(async () => undefined), delete: vi.fn(async () => undefined) };
+    const channel = {
+      isTextBased: () => true, isDMBased: () => false,
+      send: vi.fn(async () => ({ id: `message-${Math.random()}` })),
+      messages: { fetch: vi.fn(async () => message) }
+    };
+    const client = { channels: { fetch: vi.fn(async () => channel) } } as unknown as Client;
+    const cooldowns = new HostCooldownRepository(database);
+    const service = new LiveServerService(
+      client, repository, config, () => currentTime, verifier, undefined, cooldowns
+    );
+
+    const first = await service.create("guild", "owner", "carmine", newUrl);
+    expect(first.ok).toBe(true);
+    expect(cooldowns.get("owner")?.nextEligibleAt).toBe(currentTime + HOST_COOLDOWN_MS);
+
+    currentTime += 60 * 60 * 1_000;
+    await expect(service.create("guild", "owner", "xp", newUrl)).resolves.toEqual({
+      ok: false,
+      message: "You can host another server <t:1800010800:R>."
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+
+    currentTime = 1_800_000_000_000 + HOST_COOLDOWN_MS;
+    const second = await service.create("guild", "owner", "xp", newUrl);
+    expect(second.ok).toBe(true);
+    expect(verifier.verify).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not consume cooldown on failed publication", async () => {
+    const verifier: PrivateServerVerifier = {
+      verify: vi.fn(async (url: string) => ({
+        valid: true as const, originalUrl: url,
+        resolvedUrl: "https://www.roblox.com/games/1962086868/Tower-of-Hell?privateServerLinkCode=Code",
+        placeId: "1962086868" as const
+      }))
+    };
+    const channel = {
+      isTextBased: () => true, isDMBased: () => false,
+      send: vi.fn(async () => { throw new Error("missing permission"); })
+    };
+    const cooldowns = new HostCooldownRepository(database);
+    const service = new LiveServerService(
+      { channels: { fetch: vi.fn(async () => channel) } } as unknown as Client,
+      repository, config, () => 1_800_000_000_000, verifier, undefined, cooldowns
+    );
+
+    const result = await service.create("guild", "owner", "carmine", newUrl);
+    expect(result.ok).toBe(false);
+    expect(cooldowns.get("owner")).toBeNull();
+  });
+
+  it("does not reset cooldown when changing a link or extending", async () => {
+    let currentTime = 1_800_000_000_000;
+    const verifier: PrivateServerVerifier = {
+      verify: vi.fn(async (url: string) => ({
+        valid: true as const, originalUrl: url,
+        resolvedUrl: "https://www.roblox.com/games/1962086868/Tower-of-Hell?privateServerLinkCode=Code",
+        placeId: "1962086868" as const
+      }))
+    };
+    const message = { edit: vi.fn(async () => undefined), delete: vi.fn(async () => undefined) };
+    const channel = {
+      isTextBased: () => true, isDMBased: () => false,
+      send: vi.fn(async () => ({ id: `message-${Math.random()}` })),
+      messages: { fetch: vi.fn(async () => message) }
+    };
+    const cooldowns = new HostCooldownRepository(database);
+    const service = new LiveServerService(
+      { channels: { fetch: vi.fn(async () => channel) } } as unknown as Client,
+      repository, config, () => currentTime, verifier, undefined, cooldowns
+    );
+    const created = await service.create("guild", "owner", "carmine", oldUrl);
+    if (!created.ok) throw new Error(created.message);
+    const originalCooldown = cooldowns.get("owner");
+
+    currentTime += 60 * 60 * 1_000;
+    expect((await service.changeUrl(created.listing.id, "owner", newUrl)).ok).toBe(true);
+    expect(cooldowns.get("owner")).toEqual(originalCooldown);
+
+    currentTime = created.listing.expiresAt - 9 * 60 * 1_000;
+    expect((await service.extend(created.listing.id, "owner")).ok).toBe(true);
+    expect(cooldowns.get("owner")).toEqual(originalCooldown);
+  });
+
   it("preserves the old URL, expiration, and active state when Change Link verification fails", async () => {
     const listing = repository.create({
       guildId: "guild", ownerId: "owner", type: "carmine", url: oldUrl,
@@ -132,6 +227,8 @@ describe("LiveServerService verification boundary", () => {
     expect(JSON.stringify(recoveredPayload)).toContain('"value":"<t:1800000000:t>"');
     expect(JSON.stringify(recoveredPayload)).toContain('"value":"<t:1800007200:R>"');
     expect(JSON.stringify(recoveredPayload)).toContain('"label":"Join Server"');
-    expect(JSON.stringify(recoveredPayload)).toContain(oldUrl);
+    expect(JSON.stringify(recoveredPayload)).toContain('"style":1');
+    expect(JSON.stringify(recoveredPayload)).toContain(`"custom_id":"lsjoin:open:${listing.id}"`);
+    expect(JSON.stringify(recoveredPayload)).not.toContain(oldUrl);
   });
 });

@@ -41,21 +41,21 @@ describe("Discord message builders", () => {
 
     const componentsJson = JSON.stringify(message.components);
     expect(componentsJson).toContain('"label":"Join Server"');
-    expect(componentsJson).toContain('"style":5');
-    expect(componentsJson).toContain(`"url":"${typedListing.url}"`);
+    expect(componentsJson).toContain('"style":1');
+    expect(componentsJson).toContain(`"custom_id":"lsjoin:open:${typedListing.id}"`);
+    expect(componentsJson).not.toContain(typedListing.url);
     expect(componentsJson).toContain(`"custom_id":"lsreport:submit:${typedListing.id}"`);
     expect(componentsJson).toContain('"label":"Report"');
   });
 
-  it("changes only the button URL when Change Link supplies an updated listing", () => {
+  it("keeps the canonical blue Join Server control when Change Link updates persisted state", () => {
     const replacementUrl = "https://www.roblox.com/share?code=Replacement123&type=Server";
     const original = liveMessage(listing, "98765432109876543");
     const changed = liveMessage({ ...listing, url: replacementUrl }, "98765432109876543");
 
     expect(JSON.stringify(original.embeds)).toBe(JSON.stringify(changed.embeds));
-    expect(JSON.stringify(original.components)).toContain(listing.url);
-    expect(JSON.stringify(changed.components)).toContain(replacementUrl);
-    expect(JSON.stringify(changed.components)).not.toContain(listing.url);
+    expect(JSON.stringify(changed.components)).toBe(JSON.stringify(original.components));
+    expect(JSON.stringify(changed.components)).not.toContain(replacementUrl);
   });
 
   it("changes only the expiration display when a listing is extended", () => {
@@ -73,7 +73,8 @@ describe("Discord message builders", () => {
     });
     expect(extendedEmbed?.fields?.[0]).toEqual(originalEmbed?.fields?.[0]);
     expect(extendedEmbed?.fields?.[1]).toEqual(originalEmbed?.fields?.[1]);
-    expect(JSON.stringify(extended.components)).toContain(listing.url);
+    expect(JSON.stringify(extended.components)).toContain('"style":1');
+    expect(JSON.stringify(extended.components)).toContain(`lsjoin:open:${listing.id}`);
     expect(JSON.stringify(extended.components)).toContain('"label":"Join Server"');
   });
 

@@ -86,6 +86,12 @@ export function openDatabase(path: string): Database.Database {
       triggering_session_id TEXT NOT NULL REFERENCES live_server_listings(id),
       moderator_id TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS host_cooldowns (
+      user_id TEXT PRIMARY KEY,
+      listing_id TEXT NOT NULL REFERENCES live_server_listings(id),
+      successful_creation_at INTEGER NOT NULL
+    );
   `);
   migrateReportReasons(db);
   return db;

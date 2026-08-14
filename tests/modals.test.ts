@@ -10,8 +10,8 @@ import {
 } from "../src/interactions/modals.js";
 
 const modalCases = [
-  { name: "/carmine", customId: "lsv1:create:carmine", title: "Start a Carmine Hunt" },
-  { name: "/xp", customId: "lsv1:create:xp", title: "Start XP Grinding" },
+  { name: "/hostgrind Carmine option", customId: "lsv1:create:carmine", title: "Start a Carmine Hunt" },
+  { name: "/hostgrind XP option", customId: "lsv1:create:xp", title: "Start XP Grinding" },
   { name: "Change Link", customId: "lsv1:change:listing-id", title: "Change private-server link" }
 ];
 

@@ -15,12 +15,22 @@ import {
   type PrivateServerVerifier,
   type RobloxVerificationResult
 } from "../roblox/private-server-verifier.js";
+import type { HostCooldownStore } from "../storage/host-cooldown-repository.js";
 
 export type ServiceResult = { ok: true; listing: Listing; message?: string } | { ok: false; message: string };
 
 export interface HostStatusProvider {
   isHostBlacklisted(userId: string): boolean;
 }
+
+export type HostingEligibility =
+  | { ok: true }
+  | { ok: false; message: string; nextEligibleAt?: number };
+
+const NO_HOST_COOLDOWNS: HostCooldownStore = {
+  get: () => null,
+  recordSuccessfulCreation: () => undefined
+};
 
 function isUnknownMessage(error: unknown): boolean {
   return error instanceof DiscordAPIError && error.code === 10008;
@@ -35,7 +45,8 @@ export class LiveServerService {
     private readonly config: Config,
     private readonly now: () => number = Date.now,
     private readonly privateServerVerifier: PrivateServerVerifier = new RobloxPrivateServerVerifier(),
-    private readonly hostStatus: HostStatusProvider = { isHostBlacklisted: () => false }
+    private readonly hostStatus: HostStatusProvider = { isHostBlacklisted: () => false },
+    private readonly hostCooldowns: HostCooldownStore = NO_HOST_COOLDOWNS
   ) {}
 
   findActive(guildId: string, ownerId: string, type: ServerType): Listing | null {
@@ -50,6 +61,33 @@ export class LiveServerService {
     return this.hostStatus.isHostBlacklisted(ownerId);
   }
 
+  checkHostingEligibility(ownerId: string): HostingEligibility {
+    if (this.isHostBlacklisted(ownerId)) {
+      return {
+        ok: false,
+        message: "You are blacklisted from creating live-server announcements. Contact a moderator to appeal."
+      };
+    }
+    const cooldown = this.hostCooldowns.get(ownerId);
+    if (cooldown && cooldown.nextEligibleAt > this.now()) {
+      return {
+        ok: false,
+        message: `You can host another server <t:${Math.floor(cooldown.nextEligibleAt / 1_000)}:R>.`,
+        nextEligibleAt: cooldown.nextEligibleAt
+      };
+    }
+    return { ok: true };
+  }
+
+  checkCreationEligibility(guildId: string, ownerId: string, type: ServerType): HostingEligibility {
+    const eligibility = this.checkHostingEligibility(ownerId);
+    if (!eligibility.ok) return eligibility;
+    if (this.findActive(guildId, ownerId, type)) {
+      return { ok: false, message: "You already have an active listing of this type. Use its existing control panel." };
+    }
+    return { ok: true };
+  }
+
   private roleId(type: ServerType): string {
     return type === "carmine" ? this.config.carmineRoleId : this.config.xpRoleId;
   }
@@ -61,12 +99,9 @@ export class LiveServerService {
   }
 
   async create(guildId: string, ownerId: string, type: ServerType, url: string): Promise<ServiceResult> {
-    return this.mutex.run(`owner:${guildId}:${ownerId}:${type}`, async () => {
-      const existing = this.findActive(guildId, ownerId, type);
-      if (existing) return { ok: false, message: "You already have an active listing of this type. Use its control panel instead." };
-      if (this.isHostBlacklisted(ownerId)) {
-        return { ok: false, message: "You are blacklisted from creating live-server announcements. Contact a moderator to appeal." };
-      }
+    return this.mutex.run(`owner:${guildId}:${ownerId}`, async () => {
+      const eligibility = this.checkCreationEligibility(guildId, ownerId, type);
+      if (!eligibility.ok) return { ok: false, message: eligibility.message };
 
       const verification = await this.privateServerVerifier.verify(url);
       if (!verification.valid) return { ok: false, message: this.verificationFailureMessage(verification) };
@@ -99,7 +134,9 @@ export class LiveServerService {
         const controlChannel = await this.textChannel(this.config.commandsChannelId);
         const postedControl = await controlChannel.send(controlMessage(listing));
         this.repository.setControlMessageId(listing.id, postedControl.id, this.now());
-        return { ok: true, listing: this.repository.get(listing.id)!, message: `Your listing is live. Manage it with the control panel below.` };
+        listing = this.repository.get(listing.id)!;
+        this.hostCooldowns.recordSuccessfulCreation(ownerId, listing.id, this.now());
+        return { ok: true, listing, message: `Your listing is live. Manage it with the control panel below.` };
       } catch (error) {
         this.repository.deactivate(listing.id, "creation_failed", this.now());
         await this.cleanup(listing.id);

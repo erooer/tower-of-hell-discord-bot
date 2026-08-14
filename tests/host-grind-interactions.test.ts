@@ -1,0 +1,131 @@
+import { Events, MessageFlags, type Client } from "discord.js";
+import { describe, expect, it, vi } from "vitest";
+import { liveServerCommands } from "../src/commands/live-server-commands.js";
+import { hostGrindSelector } from "../src/interactions/host-grind.js";
+import { registerInteractionRouter } from "../src/interactions/router.js";
+import type { Config } from "../src/config.js";
+import type { LiveServerService } from "../src/live-servers/service.js";
+import type { ModerationService } from "../src/moderation/service.js";
+
+const config = { guildId: "guild", commandsChannelId: "commands" } as Config;
+
+function installRouter(service: Partial<LiveServerService>) {
+  let handler!: (interaction: any) => Promise<void>;
+  const client = {
+    on: vi.fn((event: string, callback: typeof handler) => {
+      if (event === Events.InteractionCreate) handler = callback;
+      return client;
+    })
+  } as unknown as Client;
+  registerInteractionRouter(client, service as LiveServerService, {} as ModerationService, config);
+  return handler;
+}
+
+function classifiers(kind: "command" | "select" | "button") {
+  return {
+    isChatInputCommand: () => kind === "command",
+    isStringSelectMenu: () => kind === "select",
+    isButton: () => kind === "button",
+    isModalSubmit: () => false,
+    isRepliable: () => true
+  };
+}
+
+describe("/hostgrind interactions", () => {
+  it("registers only /hostgrind", () => {
+    expect(liveServerCommands.map((command) => command.name)).toEqual(["hostgrind"]);
+    expect(liveServerCommands.map((command) => command.name)).not.toContain("carmine");
+    expect(liveServerCommands.map((command) => command.name)).not.toContain("xp");
+  });
+
+  it("offers Carmine Hunting and XP Grinding", () => {
+    const payload = JSON.parse(JSON.stringify(hostGrindSelector()));
+    expect(payload.components[0].components[0]).toMatchObject({
+      custom_id: "lshost:type",
+      options: [
+        { label: "Carmine Hunting", value: "carmine" },
+        { label: "XP Grinding", value: "xp" }
+      ]
+    });
+  });
+
+  it("opening /hostgrind checks eligibility and shows the selector without creating a server", async () => {
+    const checkHostingEligibility = vi.fn(() => ({ ok: true as const }));
+    const create = vi.fn();
+    const handler = installRouter({ checkHostingEligibility, create });
+    const reply = vi.fn(async (_payload: unknown) => undefined);
+    await handler({
+      ...classifiers("command"), commandName: "hostgrind", channelId: "commands", guildId: "guild",
+      user: { id: "host" }, reply, followUp: vi.fn(), deferred: false, replied: false
+    });
+
+    expect(checkHostingEligibility).toHaveBeenCalledWith("host");
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ flags: MessageFlags.Ephemeral }));
+    expect(JSON.stringify(reply.mock.calls[0]?.[0])).toContain("lshost:type");
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["carmine", "lsv1:create:carmine", "Start a Carmine Hunt"],
+    ["xp", "lsv1:create:xp", "Start XP Grinding"]
+  ])("selecting %s opens its existing creation modal without creating yet", async (type, customId, title) => {
+    const checkCreationEligibility = vi.fn(() => ({ ok: true as const }));
+    const create = vi.fn();
+    const handler = installRouter({ checkCreationEligibility, create });
+    const showModal = vi.fn(async (_modal: unknown) => undefined);
+    await handler({
+      ...classifiers("select"), customId: "lshost:type", values: [type], channelId: "commands", guildId: "guild",
+      user: { id: "host" }, showModal, reply: vi.fn(), followUp: vi.fn(), deferred: false, replied: false
+    });
+
+    expect(checkCreationEligibility).toHaveBeenCalledWith("guild", "host", type);
+    const modal = showModal.mock.calls[0]?.[0] as { toJSON(): unknown };
+    expect(modal.toJSON()).toMatchObject({ custom_id: customId, title });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("returns the persisted cooldown timestamp before showing the selector", async () => {
+    const message = "You can host another server <t:1800010800:R>.";
+    const handler = installRouter({ checkHostingEligibility: vi.fn(() => ({ ok: false as const, message })) });
+    const reply = vi.fn(async (_payload: unknown) => undefined);
+    await handler({
+      ...classifiers("command"), commandName: "hostgrind", channelId: "commands", guildId: "guild",
+      user: { id: "host" }, reply, followUp: vi.fn(), deferred: false, replied: false
+    });
+    expect(reply).toHaveBeenCalledWith({ content: message, flags: MessageFlags.Ephemeral });
+  });
+
+  it("preserves the host blacklist check", async () => {
+    const message = "You are blacklisted from creating live-server announcements. Contact a moderator to appeal.";
+    const handler = installRouter({ checkHostingEligibility: vi.fn(() => ({ ok: false as const, message })) });
+    const reply = vi.fn(async (_payload: unknown) => undefined);
+    await handler({
+      ...classifiers("command"), commandName: "hostgrind", channelId: "commands", guildId: "guild",
+      user: { id: "host" }, reply, followUp: vi.fn(), deferred: false, replied: false
+    });
+    expect(reply).toHaveBeenCalledWith({ content: message, flags: MessageFlags.Ephemeral });
+  });
+});
+
+describe("blue Join Server interaction", () => {
+  it("uses the listing's latest persisted URL after Change Link", async () => {
+    const replacementUrl = "https://www.roblox.com/share?code=Replacement123&type=Server";
+    const handler = installRouter({
+      get: vi.fn(() => ({
+        id: "listing", guildId: "guild", ownerId: "host", type: "xp" as const, url: replacementUrl,
+        liveChannelId: "live", liveMessageId: "message", controlChannelId: "commands", controlMessageId: "control",
+        createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
+        endedAt: null, endedReason: null, updatedAt: 1_800_000_000_000
+      }))
+    });
+    const reply = vi.fn(async (_payload: unknown) => undefined);
+    await handler({
+      ...classifiers("button"), customId: "lsjoin:open:listing", guildId: "guild", user: { id: "viewer" },
+      reply, followUp: vi.fn(), deferred: false, replied: false
+    });
+    expect(reply).toHaveBeenCalledWith({
+      content: `Join this server: ${replacementUrl}`,
+      flags: MessageFlags.Ephemeral
+    });
+  });
+});

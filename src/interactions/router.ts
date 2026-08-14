@@ -8,7 +8,6 @@ import {
   type StringSelectMenuInteraction
 } from "discord.js";
 import type { Config } from "../config.js";
-import type { ServerType } from "../live-servers/model.js";
 import type { LiveServerService } from "../live-servers/service.js";
 import { normalizePrivateServerUrl } from "../live-servers/url.js";
 import {
@@ -20,6 +19,7 @@ import {
 } from "./modals.js";
 import type { ModerationService } from "../moderation/service.js";
 import type { StaffActor } from "../moderation/model.js";
+import { hostGrindSelector, HOST_GRIND_SELECT_ID } from "./host-grind.js";
 
 
 export function registerInteractionRouter(
@@ -31,6 +31,7 @@ export function registerInteractionRouter(
   client.on(Events.InteractionCreate, async (interaction) => {
     try {
       if (interaction.isChatInputCommand()) await handleCommand(interaction, service, config);
+      else if (interaction.isButton() && interaction.customId.startsWith("lsjoin:")) await handleJoinButton(interaction, service);
       else if (interaction.isButton() && interaction.customId.startsWith("lsreport:")) await handleReportButton(interaction, moderation);
       else if (interaction.isModalSubmit() && interaction.customId.startsWith("lsreport:form:")) {
         await handleReportModal(interaction, moderation);
@@ -38,6 +39,9 @@ export function registerInteractionRouter(
       else if (interaction.isButton() && interaction.customId.startsWith("lsmod:")) await handleModerationButton(interaction, moderation);
       else if (interaction.isStringSelectMenu() && interaction.customId.startsWith("lsmod:blacklist:")) {
         await handleBlacklistSelect(interaction, moderation);
+      }
+      else if (interaction.isStringSelectMenu() && interaction.customId === HOST_GRIND_SELECT_ID) {
+        await handleHostGrindSelect(interaction, service, config);
       }
       else if (interaction.isButton() && interaction.customId.startsWith("lsv1:")) await handleButton(interaction, service, moderation);
       else if (interaction.isModalSubmit() && interaction.customId.startsWith("lsv1:")) await handleModal(interaction, service, moderation, config);
@@ -61,6 +65,20 @@ async function handleReportButton(interaction: ButtonInteraction, moderation: Mo
     return;
   }
   await interaction.showModal(createLiveServerReportModal(sessionId));
+}
+
+async function handleJoinButton(interaction: ButtonInteraction, service: LiveServerService): Promise<void> {
+  const [, action, id] = interaction.customId.split(":");
+  if (action !== "open" || !id) return;
+  const listing = service.get(id);
+  if (!listing || !listing.active || listing.guildId !== interaction.guildId) {
+    await interaction.reply({ content: "This listing is no longer active.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  await interaction.reply({
+    content: `Join this server: ${listing.url}`,
+    flags: MessageFlags.Ephemeral
+  });
 }
 
 async function handleReportModal(
@@ -127,21 +145,36 @@ function staffActor(interaction: ButtonInteraction | StringSelectMenuInteraction
 }
 
 async function handleCommand(interaction: ChatInputCommandInteraction, service: LiveServerService, config: Config): Promise<void> {
-  if (interaction.commandName !== "carmine" && interaction.commandName !== "xp") return;
+  if (interaction.commandName !== "hostgrind") return;
   if (interaction.channelId !== config.commandsChannelId || interaction.guildId !== config.guildId) {
     await interaction.reply({ content: `This command only works in <#${config.commandsChannelId}>.`, flags: MessageFlags.Ephemeral });
     return;
   }
-  const type: ServerType = interaction.commandName;
-  if (service.isHostBlacklisted(interaction.user.id)) {
-    await interaction.reply({
-      content: "You are blacklisted from creating live-server announcements. Contact a moderator to appeal.",
-      flags: MessageFlags.Ephemeral
-    });
+  const eligibility = service.checkHostingEligibility(interaction.user.id);
+  if (!eligibility.ok) {
+    await interaction.reply({ content: eligibility.message, flags: MessageFlags.Ephemeral });
     return;
   }
-  if (service.findActive(interaction.guildId, interaction.user.id, type)) {
-    await interaction.reply({ content: "You already have an active listing of this type. Use its existing control panel.", flags: MessageFlags.Ephemeral });
+  await interaction.reply({ ...hostGrindSelector(), flags: MessageFlags.Ephemeral });
+}
+
+async function handleHostGrindSelect(
+  interaction: StringSelectMenuInteraction,
+  service: LiveServerService,
+  config: Config
+): Promise<void> {
+  if (interaction.channelId !== config.commandsChannelId || interaction.guildId !== config.guildId) {
+    await interaction.reply({ content: `This action only works in <#${config.commandsChannelId}>.`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const type = interaction.values[0];
+  if (type !== "carmine" && type !== "xp") {
+    await interaction.reply({ content: "Choose a valid grind type.", flags: MessageFlags.Ephemeral });
+    return;
+  }
+  const eligibility = service.checkCreationEligibility(interaction.guildId, interaction.user.id, type);
+  if (!eligibility.ok) {
+    await interaction.reply({ content: eligibility.message, flags: MessageFlags.Ephemeral });
     return;
   }
   await interaction.showModal(createPrivateServerUrlModal(
