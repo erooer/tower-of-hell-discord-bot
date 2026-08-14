@@ -37,6 +37,18 @@ export interface SessionLogger {
 
 export const NO_SESSION_LOGGER: SessionLogger = { log: async () => undefined };
 
+export function logEventFailureContext(event: LogEvent): { label: string; subjectId: string } {
+  switch (event.kind) {
+    case "host-status":
+      return { label: event.title, subjectId: event.targetUserId };
+    case "blocked-private-server-link":
+      return { label: "Private Server Link Blocked", subjectId: event.userId };
+    case "session":
+    case undefined:
+      return { label: event.title, subjectId: event.listing.id };
+  }
+}
+
 export function sessionLogMessage(event: LogEvent): MessageCreateOptions {
   if (event.kind === "blocked-private-server-link") {
     return {

@@ -10,7 +10,12 @@ import type { HostModerationStatus } from "../storage/moderation-repository.js";
 import { isReportReason } from "./model.js";
 import type { HostCooldownStore } from "../storage/host-cooldown-repository.js";
 import { hostStatusMessage, type HostStatusAction } from "./host-status.js";
-import { NO_SESSION_LOGGER, type LogEvent, type SessionLogger } from "../logging/session-logger.js";
+import {
+  logEventFailureContext,
+  NO_SESSION_LOGGER,
+  type LogEvent,
+  type SessionLogger
+} from "../logging/session-logger.js";
 
 function isUnknownMessage(error: unknown): boolean {
   return error instanceof DiscordAPIError && error.code === 10008;
@@ -419,8 +424,8 @@ export class ModerationService {
     try {
       await this.sessionLogger.log(event);
     } catch (error) {
-      console.error("Failed to write moderation session log", event.title,
-        event.kind === "host-status" ? event.targetUserId : event.listing.id, error);
+      const context = logEventFailureContext(event);
+      console.error("Failed to write moderation session log", context.label, context.subjectId, error);
     }
   }
 }

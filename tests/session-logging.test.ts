@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import type { Client } from "discord.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
-import { sessionLogMessage, type SessionLogger } from "../src/logging/session-logger.js";
+import { logEventFailureContext, sessionLogMessage, type SessionLogger } from "../src/logging/session-logger.js";
 import { LiveServerService } from "../src/live-servers/service.js";
 import type { Listing } from "../src/live-servers/model.js";
 import { ModerationService } from "../src/moderation/service.js";
@@ -216,6 +216,27 @@ describe("session action logging", () => {
 });
 
 describe("session log payload", () => {
+  it("derives failure context safely for every log-event kind", () => {
+    const listing: Listing = {
+      id: "listing-id", guildId: "guild", ownerId: "host", type: "xp", url: oldUrl,
+      hostSource: "self", hostMessage: null,
+      liveChannelId: "live", liveMessageId: "live", controlChannelId: "controls", controlMessageId: "control",
+      createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
+      endedAt: null, endedReason: null, updatedAt: 1_800_000_000_000
+    };
+    expect(logEventFailureContext({
+      title: "Session Created", action: "Created", listing,
+      actor: { kind: "host", userId: "host" }, occurredAt: 1_800_000_000_000
+    })).toEqual({ label: "Session Created", subjectId: "listing-id" });
+    expect(logEventFailureContext({
+      kind: "host-status", title: "Host Status Updated", action: "Added strike",
+      targetUserId: "target", moderatorId: "moderator", result: "1 / 3", occurredAt: 1_800_000_000_000
+    })).toEqual({ label: "Host Status Updated", subjectId: "target" });
+    expect(logEventFailureContext({
+      kind: "blocked-private-server-link", userId: "poster", occurredAt: 1_800_000_000_000
+    })).toEqual({ label: "Private Server Link Blocked", subjectId: "poster" });
+  });
+
   it("contains the host, actor, action, type, time, and listing without exposing the Roblox URL", () => {
     const listing = {
       id: "listing-id", guildId: "guild", ownerId: "host", type: "carmine" as const, url: oldUrl,
