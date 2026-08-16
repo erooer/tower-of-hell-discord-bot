@@ -5,7 +5,7 @@ import { EXTENSION_MS, EXTENSION_WINDOW_MS, type Listing, type ServerType } from
 type ListingRow = {
   id: string; guild_id: string; owner_id: string; type: ServerType; url: string;
   host_source: Listing["hostSource"]; host_message: string | null;
-  live_channel_id: string; live_message_id: string | null; control_channel_id: string;
+  live_channel_id: string; live_message_id: string | null; thread_id: string | null; control_channel_id: string;
   control_message_id: string | null; created_at: number; expires_at: number; active: number;
   cleanup_pending: number; ended_at: number | null; ended_reason: string | null; updated_at: number;
 };
@@ -15,6 +15,7 @@ function map(row: ListingRow): Listing {
     id: row.id, guildId: row.guild_id, ownerId: row.owner_id, type: row.type, url: row.url,
     hostSource: row.host_source, hostMessage: row.host_message,
     liveChannelId: row.live_channel_id, liveMessageId: row.live_message_id,
+    threadId: row.thread_id,
     controlChannelId: row.control_channel_id, controlMessageId: row.control_message_id,
     createdAt: row.created_at, expiresAt: row.expires_at, active: Boolean(row.active),
     cleanupPending: Boolean(row.cleanup_pending), endedAt: row.ended_at,
@@ -27,8 +28,8 @@ export type ExtendResult =
   | { ok: false; reason: "missing" | "inactive" | "expired" | "too_early" };
 
 type CreateListingInput = Omit<Listing,
-  "id" | "active" | "cleanupPending" | "endedAt" | "endedReason" | "updatedAt" | "hostSource" | "hostMessage">
-  & Partial<Pick<Listing, "hostSource" | "hostMessage">>;
+  "id" | "active" | "cleanupPending" | "endedAt" | "endedReason" | "updatedAt" | "hostSource" | "hostMessage" | "threadId">
+  & Partial<Pick<Listing, "hostSource" | "hostMessage" | "threadId">>;
 
 export class ListingRepository {
   constructor(private readonly db: Database.Database) {}
@@ -36,9 +37,9 @@ export class ListingRepository {
   create(input: CreateListingInput): Listing {
     const id = randomUUID();
     this.db.prepare(`INSERT INTO live_server_listings
-      (id,guild_id,owner_id,type,host_source,host_message,url,live_channel_id,live_message_id,control_channel_id,control_message_id,created_at,expires_at,active,cleanup_pending,updated_at)
-      VALUES (@id,@guildId,@ownerId,@type,@hostSource,@hostMessage,@url,@liveChannelId,@liveMessageId,@controlChannelId,@controlMessageId,@createdAt,@expiresAt,1,0,@createdAt)`)
-      .run({ id, hostSource: "self", hostMessage: null, ...input });
+      (id,guild_id,owner_id,type,host_source,host_message,url,live_channel_id,live_message_id,thread_id,control_channel_id,control_message_id,created_at,expires_at,active,cleanup_pending,updated_at)
+      VALUES (@id,@guildId,@ownerId,@type,@hostSource,@hostMessage,@url,@liveChannelId,@liveMessageId,@threadId,@controlChannelId,@controlMessageId,@createdAt,@expiresAt,1,0,@createdAt)`)
+      .run({ id, hostSource: "self", hostMessage: null, threadId: null, ...input });
     return this.get(id)!;
   }
 
@@ -75,6 +76,11 @@ export class ListingRepository {
   setControlMessageId(id: string, messageId: string, now: number): void {
     this.db.prepare("UPDATE live_server_listings SET control_message_id=?, updated_at=? WHERE id=?")
       .run(messageId, now, id);
+  }
+
+  setThreadId(id: string, threadId: string, now: number): void {
+    this.db.prepare("UPDATE live_server_listings SET thread_id=?, updated_at=? WHERE id=? AND thread_id IS NULL")
+      .run(threadId, now, id);
   }
 
   updateUrl(id: string, url: string, now: number): Listing | null {

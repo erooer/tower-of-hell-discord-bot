@@ -11,6 +11,7 @@ import {
   HOST_MESSAGE_MAX_LENGTH,
   isHostSource,
   LISTING_LIFETIME_MS,
+  typeLabel,
   type HostSource,
   type Listing,
   type ServerType
@@ -44,6 +45,12 @@ const NO_HOST_COOLDOWNS: HostCooldownStore = {
 function isUnknownMessage(error: unknown): boolean {
   return error instanceof DiscordAPIError && error.code === 10008;
 }
+
+function isUnknownChannel(error: unknown): boolean {
+  return error instanceof DiscordAPIError && error.code === 10003;
+}
+
+const THREAD_OPENING_MESSAGE = "Use this thread to coordinate with the host and other players in this session.";
 
 export class LiveServerService {
   private readonly mutex = new KeyedMutex();
@@ -154,6 +161,7 @@ export class LiveServerService {
           guildId, ownerId, type, hostSource, hostMessage, url: verification.originalUrl,
           liveChannelId: this.config.liveChannelId,
           liveMessageId: null,
+          threadId: null,
           controlChannelId: this.config.commandsChannelId,
           controlMessageId: null,
           createdAt,
@@ -171,6 +179,7 @@ export class LiveServerService {
         const postedLive = await liveChannel.send(liveMessage(listing, this.roleId(type), this.reportCount(listing.id)));
         this.repository.setMessageIds(listing.id, postedLive.id, null, this.now());
         listing = this.repository.get(listing.id)!;
+        await this.createThread(listing, postedLive);
 
         const controlChannel = await this.textChannel(this.config.commandsChannelId);
         const postedControl = await controlChannel.send(controlMessage(listing));
@@ -399,11 +408,60 @@ export class LiveServerService {
     await message.edit(controlMessage(listing));
   }
 
+  private async createThread(listing: Listing, liveMessage: Message): Promise<void> {
+    let thread;
+    try {
+      thread = await liveMessage.startThread({ name: typeLabel(listing.type) });
+    } catch (error) {
+      console.error("Failed to create live-session thread", listing.id, error);
+      return;
+    }
+
+    try {
+      this.repository.setThreadId(listing.id, thread.id, this.now());
+    } catch (error) {
+      console.error("Failed to persist live-session thread", listing.id, thread.id, error);
+      try {
+        await thread.setArchived(true, "Live-session thread could not be persisted");
+        await thread.setLocked(true, "Live-session thread could not be persisted");
+      } catch (closeError) {
+        console.error("Failed to close untracked live-session thread", listing.id, thread.id, closeError);
+      }
+      return;
+    }
+
+    try {
+      await thread.send({
+        content: THREAD_OPENING_MESSAGE,
+        allowedMentions: { users: [], roles: [], repliedUser: false }
+      });
+    } catch (error) {
+      console.error("Failed to send live-session thread opening message", listing.id, thread.id, error);
+    }
+  }
+
+  private async closeThread(listing: Listing): Promise<boolean> {
+    if (!listing.threadId) return true;
+    try {
+      const channel = await this.client.channels.fetch(listing.threadId);
+      if (!channel) return true;
+      if (!channel.isThread()) throw new Error(`Stored thread ${listing.threadId} is not a Discord thread.`);
+      if (!channel.archived) await channel.setArchived(true, "Live-server session ended");
+      if (!channel.locked) await channel.setLocked(true, "Live-server session ended");
+      return true;
+    } catch (error) {
+      if (isUnknownChannel(error)) return true;
+      console.error("Failed to archive and lock live-session thread; will retry", listing.id, listing.threadId, error);
+      return false;
+    }
+  }
+
   private async cleanup(id: string): Promise<void> {
     const listing = this.repository.get(id);
     if (!listing) return;
     let liveDone = !listing.liveMessageId;
     let controlDone = !listing.controlMessageId;
+    const threadDone = await this.closeThread(listing);
     if (listing.liveMessageId) {
       try {
         const message = await this.fetchMessage(listing.liveChannelId, listing.liveMessageId);
@@ -424,6 +482,6 @@ export class LiveServerService {
         else console.error("Failed to disable control panel; will retry", listing.id, error);
       }
     }
-    if (liveDone && controlDone) this.repository.finishCleanup(id, this.now());
+    if (threadDone && liveDone && controlDone) this.repository.finishCleanup(id, this.now());
   }
 }

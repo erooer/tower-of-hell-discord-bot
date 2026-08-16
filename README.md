@@ -42,6 +42,8 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
    - Embed Links
    - Read Message History
 
+   In `LIVE_SERVERS_CHANNEL_ID`, also grant **Create Public Threads**, **Send Messages in Threads**, and **Manage Threads**. Each new live-session announcement creates one attached coordination thread, and Manage Threads lets the bot archive and lock it when the session ends.
+
    In the channel configured by `SERVER_COMMANDS_CHANNEL_ID`, also grant **Manage Messages** so the bot can remove private-server links posted outside `/hostgrind`.
 
    To ping roles that are not marked **Allow anyone to @mention this role**, also grant **Mention @everyone, @here, and All Roles**.
@@ -84,6 +86,7 @@ Enable the **Message Content Intent** for the bot in the Discord Developer Porta
 - One active listing per owner per server type is enforced by both application logic and a partial unique database index.
 - A successful publication starts a persistent two-hour cooldown for that Discord user across all session types. Members with the exact configured `MODERATOR_ROLE_ID` bypass only this cooldown; their successful listings still update cooldown history. Opening `/hostgrind`, selecting a type, failed publication, link changes, extensions, reports, and moderation do not move the cooldown.
 - Public announcements use a direct **Join Server** link button. Change Link and restart reconciliation rebuild it from the listing's latest verified URL, so its destination stays current.
+- Each newly created Carmine, XP, or Event announcement gets exactly one attached coordination thread. Its ID is stored with the listing; Change Link, extension, and reconciliation never create another. Session cleanup archives and locks the thread without deleting it, and Discord thread failures never roll back hosting.
 - Changing a link edits the original live message without pinging again or changing expiration.
 - **End Session** remains available to the session host and can also be used by a member with the exact configured moderator role. Moderator membership is refetched from Discord before the override is accepted; Change Link and Extend remain host-only.
 - Ending or expiration deletes the live message and disables the control panel. Nothing is posted to the live channel afterward.

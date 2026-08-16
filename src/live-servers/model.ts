@@ -45,6 +45,7 @@ export type Listing = {
   url: string;
   liveChannelId: string;
   liveMessageId: string | null;
+  threadId: string | null;
   controlChannelId: string;
   controlMessageId: string | null;
   createdAt: number;
