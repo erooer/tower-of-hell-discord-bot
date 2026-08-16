@@ -1,6 +1,7 @@
 import {
   Client,
   DiscordAPIError,
+  type AnyThreadChannel,
   type GuildTextBasedChannel,
   type Message,
   type TextBasedChannel
@@ -48,6 +49,10 @@ function isUnknownMessage(error: unknown): boolean {
 
 function isUnknownChannel(error: unknown): boolean {
   return error instanceof DiscordAPIError && error.code === 10003;
+}
+
+function isArchivedThread(error: unknown): boolean {
+  return error instanceof DiscordAPIError && error.code === 50083;
 }
 
 const THREAD_OPENING_MESSAGE = "Use this thread to coordinate with the host and other players in this session.";
@@ -422,8 +427,7 @@ export class LiveServerService {
     } catch (error) {
       console.error("Failed to persist live-session thread", listing.id, thread.id, error);
       try {
-        await thread.setArchived(true, "Live-session thread could not be persisted");
-        await thread.setLocked(true, "Live-session thread could not be persisted");
+        await this.applyClosedThreadState(thread, "Live-session thread could not be persisted");
       } catch (closeError) {
         console.error("Failed to close untracked live-session thread", listing.id, thread.id, closeError);
       }
@@ -443,17 +447,39 @@ export class LiveServerService {
   private async closeThread(listing: Listing): Promise<boolean> {
     if (!listing.threadId) return true;
     try {
-      const channel = await this.client.channels.fetch(listing.threadId);
+      const channel = await this.client.channels.fetch(listing.threadId, { force: true });
       if (!channel) return true;
       if (!channel.isThread()) throw new Error(`Stored thread ${listing.threadId} is not a Discord thread.`);
-      if (!channel.archived) await channel.setArchived(true, "Live-server session ended");
-      if (!channel.locked) await channel.setLocked(true, "Live-server session ended");
+      await this.applyClosedThreadState(channel, "Live-server session ended");
       return true;
     } catch (error) {
       if (isUnknownChannel(error)) return true;
+      if (isArchivedThread(error)) {
+        try {
+          const refreshed = await this.client.channels.fetch(listing.threadId, { force: true });
+          if (!refreshed) return true;
+          if (!refreshed.isThread()) throw new Error(`Stored thread ${listing.threadId} is not a Discord thread.`);
+          await this.applyClosedThreadState(refreshed, "Live-server session ended");
+          return true;
+        } catch (refreshError) {
+          if (isUnknownChannel(refreshError)) return true;
+          error = refreshError;
+        }
+      }
       console.error("Failed to archive and lock live-session thread; will retry", listing.id, listing.threadId, error);
       return false;
     }
+  }
+
+  private async applyClosedThreadState(thread: AnyThreadChannel, reason: string): Promise<void> {
+    let current = thread;
+    if (current.archived && current.locked) return;
+
+    // Discord rejects most edits to an archived thread. Reopen an archived,
+    // unlocked thread before locking it, then restore the archived state.
+    if (current.archived) current = await current.setArchived(false, reason);
+    if (!current.locked) current = await current.setLocked(true, reason);
+    if (!current.archived) await current.setArchived(true, reason);
   }
 
   private async cleanup(id: string): Promise<void> {
