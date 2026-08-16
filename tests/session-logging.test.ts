@@ -42,17 +42,26 @@ describe("session action logging", () => {
     logger = { log: vi.fn(async () => undefined) };
     moderatorRolePresent = false;
     let sent = 0;
-    const message = { edit: vi.fn(async () => undefined), delete: vi.fn(async () => undefined) };
+    const thread: any = {
+      id: "session-thread", archived: false, locked: false, isThread: () => true,
+      send: vi.fn(async () => ({ id: "opening" }))
+    };
+    thread.setArchived = vi.fn(async () => { thread.archived = true; return thread; });
+    thread.setLocked = vi.fn(async () => { thread.locked = true; return thread; });
+    const message = {
+      edit: vi.fn(async () => undefined), delete: vi.fn(async () => undefined),
+      startThread: vi.fn(async () => thread)
+    };
     const channel = {
       isTextBased: () => true, isDMBased: () => false,
-      send: vi.fn(async () => ({ id: `message-${++sent}` })),
+      send: vi.fn(async () => ({ id: `message-${++sent}`, ...message })),
       messages: { fetch: vi.fn(async () => message) }
     };
     fetchMember = vi.fn(async () => ({
       roles: { cache: { has: (roleId: string) => moderatorRolePresent && roleId === config.moderatorRoleId } }
     }));
     client = {
-      channels: { fetch: vi.fn(async () => channel) },
+      channels: { fetch: vi.fn(async (id: string) => id === thread.id ? thread : channel) },
       users: { send: vi.fn(async () => undefined) },
       guilds: { fetch: vi.fn(async () => ({ members: { fetch: fetchMember } })) }
     } as unknown as Client;
@@ -220,7 +229,7 @@ describe("session log payload", () => {
     const listing: Listing = {
       id: "listing-id", guildId: "guild", ownerId: "host", type: "xp", url: oldUrl,
       hostSource: "self", hostMessage: null,
-      liveChannelId: "live", liveMessageId: "live", controlChannelId: "controls", controlMessageId: "control",
+      liveChannelId: "live", liveMessageId: "live", threadId: null, controlChannelId: "controls", controlMessageId: "control",
       createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
       endedAt: null, endedReason: null, updatedAt: 1_800_000_000_000
     };
@@ -232,16 +241,13 @@ describe("session log payload", () => {
       kind: "host-status", title: "Host Status Updated", action: "Added strike",
       targetUserId: "target", moderatorId: "moderator", result: "1 / 3", occurredAt: 1_800_000_000_000
     })).toEqual({ label: "Host Status Updated", subjectId: "target" });
-    expect(logEventFailureContext({
-      kind: "blocked-private-server-link", userId: "poster", occurredAt: 1_800_000_000_000
-    })).toEqual({ label: "Private Server Link Blocked", subjectId: "poster" });
   });
 
   it("contains the host, actor, action, type, time, and listing without exposing the Roblox URL", () => {
     const listing = {
       id: "listing-id", guildId: "guild", ownerId: "host", type: "carmine" as const, url: oldUrl,
       hostSource: "self" as const, hostMessage: null,
-      liveChannelId: "live", liveMessageId: "message", controlChannelId: "commands", controlMessageId: "control",
+      liveChannelId: "live", liveMessageId: "message", threadId: null, controlChannelId: "commands", controlMessageId: "control",
       createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: false, cleanupPending: false,
       endedAt: 1_800_000_100_000, endedReason: "owner_ended", updatedAt: 1_800_000_100_000
     };
@@ -265,7 +271,7 @@ describe("session log payload", () => {
     const eventListing: Listing = {
       id: "event-listing", guildId: "guild", ownerId: "event-host", type: "event", url: oldUrl,
       hostSource: "self", hostMessage: null,
-      liveChannelId: "live", liveMessageId: "live", controlChannelId: "controls", controlMessageId: "control",
+      liveChannelId: "live", liveMessageId: "live", threadId: null, controlChannelId: "controls", controlMessageId: "control",
       createdAt: 1_800_000_000_000, expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
       endedAt: null, endedReason: null, updatedAt: 1_800_000_000_000
     };

@@ -10,7 +10,7 @@ import { ModerationService } from "./moderation/service.js";
 import { HostCooldownRepository } from "./storage/host-cooldown-repository.js";
 import { DiscordSessionLogger } from "./logging/session-logger.js";
 import { validateStartupConfiguration } from "./startup-validation.js";
-import { registerPrivateServerLinkFilter } from "./moderation/private-server-link-filter.js";
+import { registerCommandsOnlyFilter } from "./moderation/commands-only-filter.js";
 
 const config = loadConfig();
 const database = openDatabase(config.databasePath);
@@ -18,7 +18,7 @@ const repository = new ListingRepository(database);
 const moderationRepository = new ModerationRepository(database);
 const hostCooldownRepository = new HostCooldownRepository(database);
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
   partials: [Partials.Channel, Partials.Message]
 });
 const sessionLogger = new DiscordSessionLogger(client, config);
@@ -45,7 +45,7 @@ const moderation = new ModerationService(
 const scheduler = new ExpirationScheduler(service, config.expirationPollMs);
 
 registerInteractionRouter(client, service, moderation, config);
-registerPrivateServerLinkFilter(client, config, sessionLogger);
+registerCommandsOnlyFilter(client, config);
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Logged in as ${readyClient.user.tag}`);

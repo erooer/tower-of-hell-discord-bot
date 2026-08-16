@@ -31,15 +31,24 @@ describe("LiveServerService verification boundary", () => {
   afterEach(() => database.close());
 
   function publishingClient(roleIds: Set<string>): Client {
-    const message = { edit: vi.fn(async () => undefined), delete: vi.fn(async () => undefined) };
+    const thread: any = {
+      id: "thread", archived: false, locked: false, isThread: () => true,
+      send: vi.fn(async () => ({ id: "opening" }))
+    };
+    thread.setArchived = vi.fn(async () => { thread.archived = true; return thread; });
+    thread.setLocked = vi.fn(async () => { thread.locked = true; return thread; });
+    const message = {
+      edit: vi.fn(async () => undefined), delete: vi.fn(async () => undefined),
+      startThread: vi.fn(async () => thread)
+    };
     const channel = {
       isTextBased: () => true,
       isDMBased: () => false,
-      send: vi.fn(async () => ({ id: `message-${Math.random()}` })),
+      send: vi.fn(async () => ({ id: `message-${Math.random()}`, ...message })),
       messages: { fetch: vi.fn(async () => message) }
     };
     return {
-      channels: { fetch: vi.fn(async () => channel) },
+      channels: { fetch: vi.fn(async (id: string) => id === thread.id ? thread : channel) },
       guilds: {
         fetch: vi.fn(async () => ({
           members: {

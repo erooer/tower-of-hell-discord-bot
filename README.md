@@ -44,7 +44,7 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
 
    In `LIVE_SERVERS_CHANNEL_ID`, also grant **Create Public Threads**, **Send Messages in Threads**, and **Manage Threads**. Each new live-session announcement creates one attached coordination thread, and Manage Threads lets the bot archive and lock it when the session ends.
 
-   In the channel configured by `SERVER_COMMANDS_CHANNEL_ID`, also grant **Manage Messages** so the bot can remove private-server links posted outside `/hostgrind`.
+   In the channel configured by `SERVER_COMMANDS_CHANNEL_ID`, also grant **Manage Messages** so the bot can keep the channel commands-only.
 
    To ping roles that are not marked **Allow anyone to @mention this role**, also grant **Mention @everyone, @here, and All Roles**.
 
@@ -73,8 +73,6 @@ No privileged gateway intents are required. In the Developer Portal, the bot onl
 
 Keep `data/live-servers.sqlite` on persistent storage. `DATABASE_PATH` can point elsewhere if needed. Only one bot process should use a database file at a time.
 
-Enable the **Message Content Intent** for the bot in the Discord Developer Portal. It is required for the bot to detect private-server links posted directly in the configured Session-commands channel.
-
 ## Behavior and safeguards
 
 - A listing starts with an exact two-hour lifetime.
@@ -82,7 +80,7 @@ Enable the **Message Content Intent** for the bot in the Discord Developer Porta
 - Owners can extend by exactly one hour only in the final 30 minutes. The hour is added to the stored expiration, never to the click time. A transaction plus per-listing lock prevents double-click stacking.
 - After choosing Carmine, XP, or Event, the creator chooses **Self Hosted** or **Other** before entering the link. Self Hosted displays the creator; Other displays only `Other`, while the creator remains the internal controller. An optional, 500-character host message can be included without enabling user or role pings. Both values persist through restart reconciliation.
 - The creator's Discord user ID is checked on every button and change-link modal submission. UI visibility is not trusted.
-- In `SERVER_COMMANDS_CHANNEL_ID`, private-server links posted by non-bot, non-webhook users are removed and replaced with a short `/hostgrind` reminder. Members with the exact configured moderator role are exempt. Other channels and ordinary Roblox links are untouched, and deletion/reply/logging failures cannot stop the bot.
+- `SERVER_COMMANDS_CHANNEL_ID` is commands-only: every normal message from a non-moderator is silently removed, including attachment-only messages and typed command text. Discord slash-command interactions remain unaffected. Members with the exact configured moderator role are exempt, bot/webhook messages and other channels are ignored, and deletion failures are logged internally without stopping the bot.
 - One active listing per owner per server type is enforced by both application logic and a partial unique database index.
 - A successful publication starts a persistent two-hour cooldown for that Discord user across all session types. Members with the exact configured `MODERATOR_ROLE_ID` bypass only this cooldown; their successful listings still update cooldown history. Opening `/hostgrind`, selecting a type, failed publication, link changes, extensions, reports, and moderation do not move the cooldown.
 - Public announcements use a direct **Join Server** link button. Change Link and restart reconciliation rebuild it from the listing's latest verified URL, so its destination stays current.

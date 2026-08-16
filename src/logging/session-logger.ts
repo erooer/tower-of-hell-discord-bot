@@ -23,13 +23,7 @@ export type ModerationStatusLogEvent = {
   occurredAt: number;
 };
 
-export type BlockedLinkLogEvent = {
-  kind: "blocked-private-server-link";
-  userId: string;
-  occurredAt: number;
-};
-
-export type LogEvent = SessionLogEvent | ModerationStatusLogEvent | BlockedLinkLogEvent;
+export type LogEvent = SessionLogEvent | ModerationStatusLogEvent;
 
 export interface SessionLogger {
   log(event: LogEvent): Promise<void>;
@@ -41,8 +35,6 @@ export function logEventFailureContext(event: LogEvent): { label: string; subjec
   switch (event.kind) {
     case "host-status":
       return { label: event.title, subjectId: event.targetUserId };
-    case "blocked-private-server-link":
-      return { label: "Private Server Link Blocked", subjectId: event.userId };
     case "session":
     case undefined:
       return { label: event.title, subjectId: event.listing.id };
@@ -50,20 +42,6 @@ export function logEventFailureContext(event: LogEvent): { label: string; subjec
 }
 
 export function sessionLogMessage(event: LogEvent): MessageCreateOptions {
-  if (event.kind === "blocked-private-server-link") {
-    return {
-      allowedMentions: { users: [], roles: [], repliedUser: false },
-      embeds: [new EmbedBuilder()
-        .setColor(0xe67e22)
-        .setTitle("Private Server Link Blocked")
-        .addFields(
-          { name: "User", value: `<@${event.userId}>`, inline: true },
-          { name: "Developer ID", value: `\`${event.userId}\``, inline: true },
-          { name: "Action", value: "Removed a private-server link from Session-commands" },
-          { name: "Time", value: `<t:${Math.floor(event.occurredAt / 1_000)}:F>` }
-        )]
-    };
-  }
   if (event.kind === "host-status") {
     return {
       allowedMentions: { users: [], roles: [], repliedUser: false },

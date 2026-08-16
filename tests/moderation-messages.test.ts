@@ -7,7 +7,7 @@ const listing: Listing = {
   id: "session-id", guildId: "guild", ownerId: "host-id", type: "carmine",
   hostSource: "self", hostMessage: null,
   url: "https://www.roblox.com/share?code=ValidCode123&type=Server",
-  liveChannelId: "live", liveMessageId: "live-message", controlChannelId: "commands",
+  liveChannelId: "live", liveMessageId: "live-message", threadId: null, controlChannelId: "commands",
   controlMessageId: "control-message", createdAt: 1_800_000_000_000,
   expiresAt: 1_800_007_200_000, active: true, cleanupPending: false,
   endedAt: null, endedReason: null, updatedAt: 1_800_000_000_000

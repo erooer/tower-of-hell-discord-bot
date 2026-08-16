@@ -71,7 +71,9 @@ describe("ListingRepository", () => {
 
       database = openDatabase(path);
       repository = new ListingRepository(database);
-      expect(repository.get("legacy")).toMatchObject({ ownerId: "legacy-owner", type: "carmine", active: true });
+      expect(repository.get("legacy")).toMatchObject({
+        ownerId: "legacy-owner", type: "carmine", active: true, threadId: null
+      });
       expect((database.prepare("SELECT COUNT(*) AS count FROM live_server_reports WHERE session_id='legacy'").get() as { count: number }).count).toBe(1);
       expect(() => repository.create({
         guildId: "guild", ownerId: "event-owner", type: "event",
@@ -79,6 +81,43 @@ describe("ListingRepository", () => {
         liveMessageId: "event-message", controlChannelId: "controls", controlMessageId: "event-panel",
         createdAt: base, expiresAt: base + 7_200_000
       })).not.toThrow();
+    } finally {
+      if (database.open) database.close();
+      rmSync(directory, { recursive: true, force: true });
+      database = openDatabase(":memory:");
+      repository = new ListingRepository(database);
+    }
+  });
+
+  it("adds nullable thread persistence to the existing three-type schema", () => {
+    database.close();
+    const directory = mkdtempSync(join(tmpdir(), "listing-thread-migration-"));
+    const path = join(directory, "legacy.sqlite");
+    try {
+      const legacy = new BetterSqlite3(path);
+      legacy.exec(`CREATE TABLE live_server_listings (
+        id TEXT PRIMARY KEY, guild_id TEXT NOT NULL, owner_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('carmine','xp','event')),
+        host_source TEXT NOT NULL DEFAULT 'self' CHECK(host_source IN ('self','other')),
+        host_message TEXT, url TEXT NOT NULL, live_channel_id TEXT NOT NULL, live_message_id TEXT,
+        control_channel_id TEXT NOT NULL, control_message_id TEXT, created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+        cleanup_pending INTEGER NOT NULL DEFAULT 0, ended_at INTEGER, ended_reason TEXT,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO live_server_listings VALUES
+        ('existing','guild','owner','event','other','Existing message',
+        'https://www.roblox.com/share?code=Existing&type=Server','live','message','controls','panel',
+        ${base},${base + 7_200_000},1,0,NULL,NULL,${base});`);
+      legacy.close();
+
+      database = openDatabase(path);
+      repository = new ListingRepository(database);
+      expect(repository.get("existing")).toMatchObject({
+        type: "event", hostSource: "other", hostMessage: "Existing message", threadId: null
+      });
+      expect((database.prepare("PRAGMA table_info(live_server_listings)").all() as Array<{ name: string }>)
+        .map((column) => column.name)).toContain("thread_id");
     } finally {
       if (database.open) database.close();
       rmSync(directory, { recursive: true, force: true });
@@ -160,7 +199,8 @@ describe("ListingRepository", () => {
       database = openDatabase(path);
       repository = new ListingRepository(database);
       expect(repository.get(listing.id)).toMatchObject({
-        ownerId: "controller", hostSource: "other", hostMessage: "Realm clearing after this round"
+        ownerId: "controller", hostSource: "other", hostMessage: "Realm clearing after this round",
+        threadId: null
       });
     } finally {
       if (database.open) database.close();
@@ -168,5 +208,14 @@ describe("ListingRepository", () => {
       database = openDatabase(":memory:");
       repository = new ListingRepository(database);
     }
+  });
+
+  it("persists the announcement thread ID", () => {
+    const listing = create();
+    expect(listing.threadId).toBeNull();
+    repository.setThreadId(listing.id, "thread-id", base + 1);
+    expect(repository.get(listing.id)).toMatchObject({ threadId: "thread-id", updatedAt: base + 1 });
+    repository.setThreadId(listing.id, "replacement-thread", base + 2);
+    expect(repository.get(listing.id)?.threadId).toBe("thread-id");
   });
 });

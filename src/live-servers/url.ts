@@ -26,17 +26,6 @@ export function normalizePrivateServerUrl(input: string): string | null {
   }
 }
 
-export function findPrivateServerUrl(input: string): string | null {
-  const candidates = input.match(/https:\/\/[^\s<>]+/gi) ?? [];
-  for (const candidate of candidates) {
-    let trimmed = candidate;
-    while (/[\])},.!?:;'\"]$/.test(trimmed)) trimmed = trimmed.slice(0, -1);
-    const normalized = normalizePrivateServerUrl(trimmed);
-    if (normalized) return normalized;
-  }
-  return null;
-}
-
 export function extractPlaceIdFromGameUrl(url: URL): string | null {
   const match = /^\/games\/([0-9]+)(?:\/|$)/.exec(url.pathname);
   return match?.[1] ?? null;
